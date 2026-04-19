@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "jsx": "react",
+    "module": "es6",
+    "target": "es6",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "types": ["chrome"],
+    "lib": ["es6", "dom", "esnext"]
+  }
+}

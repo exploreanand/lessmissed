@@ -1,0 +1,21 @@
+# Added by code-review-graph
+.code-review-graph/
+
+# Dependencies
+node_modules/
+
+# Next.js
+Web-App/lessmissed/.next/
+Web-App/lessmissed/out/
+
+# Extension build output
+lessmissed_extension/dist/
+
+# Env files
+.env
+.env.local
+.env*.local
+
+# OS
+.DS_Store
+Thumbs.db
