@@ -33,5 +33,7 @@ export async function GET(request, { params }) {
     viewport_height: page.screenshot_viewport_height ?? null,
     document_height: page.screenshot_document_height ?? null,
     captured_at: page.screenshot_captured_at ?? null,
+    header_url: page.screenshot_header_url ?? null,
+    header_height: page.screenshot_header_height ?? null,
   });
 }

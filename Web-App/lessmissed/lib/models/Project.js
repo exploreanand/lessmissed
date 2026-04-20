@@ -19,6 +19,8 @@ const pageSchema = new mongoose.Schema(
     screenshot_viewport_height: { type: Number, default: null },
     screenshot_document_height: { type: Number, default: null },
     screenshot_captured_at: { type: Date, default: null },
+    screenshot_header_url: { type: String, default: null },
+    screenshot_header_height: { type: Number, default: null },
   },
   { _id: true }
 );

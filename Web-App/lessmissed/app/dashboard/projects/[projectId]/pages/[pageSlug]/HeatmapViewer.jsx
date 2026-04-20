@@ -22,16 +22,13 @@ function renderHeatmap(canvas, points, containerWidth, containerHeight, pageWidt
   const scaleX = containerWidth  / (pageWidth  || containerWidth);
   const scaleY = containerHeight / (pageHeight || containerHeight);
 
-  // Draw each point as a radial gradient blob
   for (const pt of points) {
     const x = pt.x * scaleX;
     const y = pt.y * scaleY;
-    // Radius grows with intensity (value 0-10)
     const r = Math.max(20, Math.min(80, (pt.value ?? 1) * 8));
 
     const gradient = ctx.createRadialGradient(x, y, 0, x, y, r);
 
-    // Pick color tier based on relative intensity
     const intensity = pt.value ?? 1;
     const color =
       intensity >= 7  ? colors.hot  :
@@ -39,9 +36,9 @@ function renderHeatmap(canvas, points, containerWidth, containerHeight, pageWidt
       intensity >= 2  ? colors.cool :
                         colors.cold;
 
-    gradient.addColorStop(0,   color + "cc"); // ~80% opacity at centre
-    gradient.addColorStop(0.4, color + "55"); // ~33% mid
-    gradient.addColorStop(1,   color + "00"); // transparent edge
+    gradient.addColorStop(0,   color + "cc");
+    gradient.addColorStop(0.4, color + "55");
+    gradient.addColorStop(1,   color + "00");
 
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -51,28 +48,47 @@ function renderHeatmap(canvas, points, containerWidth, containerHeight, pageWidt
 }
 
 // ---------------------------------------------------------------------------
-// Scroll-depth bar chart (used for "scroll" mode instead of blob heatmap)
+// Scroll-depth band overlay — positioned proportionally across the full page
 // ---------------------------------------------------------------------------
 function ScrollDepthChart({ bands }) {
   if (!bands?.length) return null;
   const max = Math.max(...bands.map((b) => b.session_count), 1);
   return (
-    <div className="absolute inset-0 flex items-end px-4 pb-4 gap-1">
+    <>
       {bands.map((b) => {
-        const pct = Math.round((b.session_count / max) * 100);
+        const opacity = b.session_count / max;
         return (
-          <div key={b.band} className="flex flex-col items-center flex-1 gap-1">
-            <div
-              className="w-full rounded-t-sm bg-violet-500 opacity-70 transition-all"
-              style={{ height: `${pct}%`, minHeight: pct > 0 ? 2 : 0 }}
-            />
-            <span className="text-[8px] text-zinc-400 rotate-45 origin-left whitespace-nowrap">
-              {b.band}
+          <div
+            key={b.band}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: `${b.min}%`,
+              height: `${b.max - b.min}%`,
+              backgroundColor: `rgba(239, 68, 68, ${opacity * 0.45})`,
+              borderBottom: "1px solid rgba(239, 68, 68, 0.15)",
+              pointerEvents: "none",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                right: 8,
+                top: "50%",
+                transform: "translateY(-50%)",
+                fontSize: 10,
+                color: "white",
+                textShadow: "0 1px 2px rgba(0,0,0,0.8)",
+                fontFamily: "sans-serif",
+              }}
+            >
+              {b.band} · {b.session_count}
             </span>
           </div>
         );
       })}
-    </div>
+    </>
   );
 }
 
@@ -82,7 +98,7 @@ function ScrollDepthChart({ bands }) {
 
 export default function HeatmapViewer({ projectId, pageSlug }) {
   const [mode, setMode]               = useState("gaze");
-  const [screenshot, setScreenshot]   = useState(null);  // { url, viewport_width, document_height }
+  const [screenshot, setScreenshot]   = useState(null);
   const [points, setPoints]           = useState([]);
   const [scrollBands, setScrollBands] = useState(null);
   const [loading, setLoading]         = useState(false);
@@ -133,21 +149,24 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     const container = containerRef.current;
     if (!canvas || !container || scrollBands) return;
 
-    const { width, height } = container.getBoundingClientRect();
-    canvas.width  = width;
-    canvas.height = height;
+    const pageW = screenshot?.viewport_width  || container.clientWidth;
+    const pageH = screenshot?.document_height || container.clientHeight;
 
-    const pageW = screenshot?.viewport_width  || width;
-    const pageH = screenshot?.document_height || height;
+    // Canvas pixel dimensions match the inner page proportions
+    const w = container.clientWidth;
+    const h = Math.round(w * pageH / pageW);
 
-    renderHeatmap(canvas, points, width, height, pageW, pageH, MODE_COLORS[mode]);
+    canvas.width  = w;
+    canvas.height = h;
+
+    renderHeatmap(canvas, points, w, h, pageW, pageH, MODE_COLORS[mode]);
   }, [points, screenshot, mode, scrollBands]);
 
   useEffect(() => {
     redraw();
   }, [redraw]);
 
-  // Redraw on container resize
+  // Redraw on outer container resize
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -156,11 +175,11 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     return () => ro.disconnect();
   }, [redraw]);
 
-  // ---- Aspect ratio: match screenshot proportions or fall back to 16/9 ----
-  const aspectRatio =
+  // Padding-bottom % that gives the inner page its natural aspect ratio
+  const innerPagePadding =
     screenshot?.viewport_width && screenshot?.document_height
-      ? `${screenshot.viewport_width} / ${screenshot.document_height}`
-      : "16 / 9";
+      ? `${(screenshot.document_height / screenshot.viewport_width) * 100}%`
+      : "56.25%"; // 16:9 fallback
 
   return (
     <div className="space-y-3">
@@ -180,7 +199,6 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
           </button>
         ))}
 
-        {/* Point count badge */}
         {!loading && points.length > 0 && (
           <span className="ml-auto self-center text-xs text-zinc-400">
             {points.length.toLocaleString()} data points
@@ -193,22 +211,51 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
         )}
       </div>
 
-      {/* Viewer */}
+      {/* ── Outer 16:9 viewport — clips the view, never scrolls ── */}
       <div
         ref={containerRef}
         className="relative w-full rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800"
-        style={{ aspectRatio }}
+        style={{ aspectRatio: "16 / 9" }}
       >
-        {/* Screenshot background */}
-        {screenshot?.url ? (
-          <img
-            src={screenshot.url}
-            alt="Page screenshot"
-            className="absolute inset-0 w-full h-full object-cover object-top select-none pointer-events-none"
-            draggable={false}
-          />
-        ) : (
-          /* Skeleton when no screenshot */
+        {/* Inner scrollable pane — hides the scrollbar visually */}
+        <div
+          className="absolute inset-0 overflow-y-auto"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
+          {/* Inner page — proportional to full document height */}
+          <div style={{ position: "relative", width: "100%", paddingBottom: innerPagePadding }}>
+
+            {/* Screenshot */}
+            {screenshot?.url && (
+              <img
+                src={screenshot.url}
+                alt="Page screenshot"
+                className="absolute inset-0 w-full h-full select-none pointer-events-none"
+                draggable={false}
+              />
+            )}
+
+            {/* Heatmap canvas */}
+            {mode !== "scroll" && (
+              <canvas
+                ref={canvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                style={{ mixBlendMode: "multiply" }}
+              />
+            )}
+
+            {/* Scroll depth bands — overlaid on the full page height */}
+            {mode === "scroll" && scrollBands && (
+              <ScrollDepthChart bands={scrollBands} />
+            )}
+
+          </div>
+        </div>
+
+        {/* ── Non-scrolling overlays — always visible in the 16:9 window ── */}
+
+        {/* Skeleton when screenshot is loading */}
+        {!screenshot?.url && !noScreenshot && (
           <div className="absolute inset-0 p-6 flex flex-col gap-4 pointer-events-none select-none">
             <div className="flex items-center justify-between">
               <div className="h-3 w-20 rounded-full bg-zinc-300 dark:bg-zinc-600" />
@@ -227,22 +274,6 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
           </div>
         )}
 
-        {/* Heatmap canvas overlay */}
-        {mode !== "scroll" && (
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ mixBlendMode: "multiply" }}
-          />
-        )}
-
-        {/* Scroll depth bar chart */}
-        {mode === "scroll" && scrollBands && (
-          <div className="absolute inset-0 bg-white/30 dark:bg-zinc-900/40">
-            <ScrollDepthChart bands={scrollBands} />
-          </div>
-        )}
-
         {/* No screenshot notice */}
         {noScreenshot && (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm">
@@ -255,7 +286,7 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
           </div>
         )}
 
-        {/* Empty data notice (screenshot exists, but no events yet) */}
+        {/* Empty data notice */}
         {!noScreenshot && !loading && points.length === 0 && !scrollBands && (
           <div className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1.5">
             <p className="text-xs text-zinc-300">No {mode} data yet for this page</p>
@@ -271,6 +302,27 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
           </div>
           <span className="text-[10px] text-zinc-500 dark:text-zinc-400">Low → High</span>
         </div>
+
+        {/* Fixed nav overlay — mirrors how the real site shows the navbar over scrolled content */}
+        {screenshot?.header_url && screenshot.header_height > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: 0, left: 0, right: 0,
+              zIndex: 20,
+              aspectRatio: `${screenshot.viewport_width} / ${screenshot.header_height}`,
+              pointerEvents: "none",
+              overflow: "hidden",
+            }}
+          >
+            <img
+              src={screenshot.header_url}
+              alt=""
+              className="w-full block select-none pointer-events-none"
+              draggable={false}
+            />
+          </div>
+        )}
       </div>
 
       {/* Screenshot status footer */}

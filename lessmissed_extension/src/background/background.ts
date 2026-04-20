@@ -79,6 +79,8 @@ interface ScreenshotResult {
   viewportWidth: number;
   viewportHeight: number;
   documentHeight: number;
+  headerDataUrl: string;
+  headerHeight: number;
 }
 
 async function captureFullPage(tabId: number, windowId: number): Promise<ScreenshotResult> {
@@ -92,16 +94,36 @@ async function captureFullPage(tabId: number, windowId: number): Promise<Screens
   await sendToTab(tabId, { action: 'SCROLL_TO', y: 0 });
   await sleep(200);
 
+  // Capture first viewport WITH fixed elements visible — used as the sticky nav overlay in the viewer
+  const headerFullDataUrl = await captureVisibleTab(windowId);
+  await sleep(520); // rate-limit gap (Chrome allows 2 captureVisibleTab/sec)
+
+  // Hide fixed/sticky elements; response includes the height of top-fixed elements (nav bar)
+  const hideResult = await sendToTab(tabId, { action: 'HIDE_FIXED_ELEMENTS' });
+  const headerHeightCSS: number = hideResult?.headerHeight ?? 0;
+  await sleep(80); // allow CSS to apply before first capture
+
   const segments: Array<{ scrollY: number; dataUrl: string }> = [];
-  for (let step = 0; step < totalSteps; step++) {
-    const targetScrollY = step * viewportHeight;
-    await sendToTab(tabId, { action: 'SCROLL_TO', y: targetScrollY });
-    await sleep(520); // Chrome caps captureVisibleTab at 2 calls/sec; 520ms keeps us safely under
-    segments.push({ scrollY: targetScrollY, dataUrl: await captureVisibleTab(windowId) });
+  try {
+    for (let step = 0; step < totalSteps; step++) {
+      const targetScrollY = step * viewportHeight;
+      // scrollRes.scrollY is the actual scroll position after clamping to page limits
+      const scrollRes = await sendToTab(tabId, { action: 'SCROLL_TO', y: targetScrollY });
+      const actualScrollY: number = scrollRes?.scrollY ?? targetScrollY;
+
+      // Page can't scroll further — no new content to capture
+      if (step > 0 && actualScrollY <= segments[segments.length - 1].scrollY) break;
+
+      await sleep(520); // Chrome caps captureVisibleTab at 2 calls/sec
+      segments.push({ scrollY: actualScrollY, dataUrl: await captureVisibleTab(windowId) });
+    }
+  } finally {
+    // Always restore fixed elements — even if a capture throws mid-loop
+    await sendToTab(tabId, { action: 'SHOW_FIXED_ELEMENTS' });
+    await sendToTab(tabId, { action: 'SCROLL_TO', y: originalScrollY });
   }
 
-  await sendToTab(tabId, { action: 'SCROLL_TO', y: originalScrollY });
-
+  // Stitch segments onto a CSS-pixel-dimensioned canvas
   const canvas = new OffscreenCanvas(viewportWidth, maxHeight);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not get 2D context from OffscreenCanvas');
@@ -109,15 +131,40 @@ async function captureFullPage(tabId: number, windowId: number): Promise<Screens
   for (const seg of segments) {
     const blob = await (await fetch(seg.dataUrl)).blob();
     const bitmap = await createImageBitmap(blob);
-    const availableHeight = Math.min(viewportHeight, maxHeight - seg.scrollY);
-    if (availableHeight > 0) {
-      ctx.drawImage(bitmap, 0, 0, viewportWidth, availableHeight, 0, seg.scrollY, viewportWidth, availableHeight);
+    const dstH = Math.min(viewportHeight, maxHeight - seg.scrollY);
+    if (dstH > 0) {
+      // bitmap dimensions are physical pixels (2× on Retina); scale source height proportionally
+      const srcH = Math.round(dstH * bitmap.height / viewportHeight);
+      ctx.drawImage(bitmap, 0, 0, bitmap.width, srcH, 0, seg.scrollY, viewportWidth, dstH);
     }
     bitmap.close();
   }
 
   const finalBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
-  return { dataUrl: await blobToDataURL(finalBlob), viewportWidth, viewportHeight, documentHeight: maxHeight };
+
+  // Crop the header capture to just the nav bar height
+  let headerDataUrl = '';
+  if (headerHeightCSS > 0) {
+    const hBlob = await (await fetch(headerFullDataUrl)).blob();
+    const hBitmap = await createImageBitmap(hBlob);
+    const dpr = hBitmap.width / viewportWidth;
+    const hCanvas = new OffscreenCanvas(viewportWidth, headerHeightCSS);
+    const hCtx = hCanvas.getContext('2d');
+    if (hCtx) {
+      hCtx.drawImage(hBitmap, 0, 0, hBitmap.width, Math.round(headerHeightCSS * dpr), 0, 0, viewportWidth, headerHeightCSS);
+    }
+    hBitmap.close();
+    headerDataUrl = await blobToDataURL(await hCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 }));
+  }
+
+  return {
+    dataUrl: await blobToDataURL(finalBlob),
+    viewportWidth,
+    viewportHeight,
+    documentHeight: maxHeight,
+    headerDataUrl,
+    headerHeight: headerHeightCSS,
+  };
 }
 
 async function uploadScreenshot(
@@ -138,6 +185,8 @@ async function uploadScreenshot(
         viewport_width: screenshot.viewportWidth,
         viewport_height: screenshot.viewportHeight,
         document_height: screenshot.documentHeight,
+        header_image_base64: screenshot.headerDataUrl || undefined,
+        header_height: screenshot.headerHeight || undefined,
       }),
     });
     return res.ok ? await res.json() : null;

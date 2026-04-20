@@ -253,7 +253,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
   if (request.action === 'SCROLL_TO') {
     window.scrollTo({ top: request.y ?? 0, behavior: 'instant' as ScrollBehavior });
-    setTimeout(() => sendResponse({ ok: true }), 80);
+    setTimeout(() => sendResponse({ ok: true, scrollY: window.scrollY }), 80);
     return true;
   }
 
@@ -307,6 +307,39 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.action === 'CALIBRATE') {
     startCalibration(sendResponse);
     return true;
+  }
+
+  if (request.action === 'HIDE_FIXED_ELEMENTS') {
+    const styleEl = document.createElement('style');
+    styleEl.id = '__lm_hide_fixed';
+    styleEl.textContent = '[data-lm-hide]{visibility:hidden!important}';
+    document.head.appendChild(styleEl);
+
+    let count = 0;
+    let headerHeight = 0;
+    document.querySelectorAll<HTMLElement>('*').forEach(el => {
+      const pos = window.getComputedStyle(el).position;
+      if (pos === 'fixed' || pos === 'sticky') {
+        const rect = el.getBoundingClientRect();
+        // Track bottom edge of top-anchored fixed elements (nav bars)
+        if (rect.top <= 5 && rect.bottom > headerHeight) {
+          headerHeight = rect.bottom;
+        }
+        el.dataset.lmHide = '1';
+        count++;
+      }
+    });
+    sendResponse({ ok: true, count, headerHeight: Math.round(headerHeight) });
+    return false;
+  }
+
+  if (request.action === 'SHOW_FIXED_ELEMENTS') {
+    document.querySelectorAll<HTMLElement>('[data-lm-hide]').forEach(el => {
+      delete el.dataset.lmHide;
+    });
+    document.getElementById('__lm_hide_fixed')?.remove();
+    sendResponse({ ok: true });
+    return false;
   }
 
   return false;
