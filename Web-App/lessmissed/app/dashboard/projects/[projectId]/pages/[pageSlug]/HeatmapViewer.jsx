@@ -149,10 +149,10 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     const container = containerRef.current;
     if (!canvas || !container || scrollBands) return;
 
-    const pageW = screenshot?.viewport_width  || container.clientWidth;
-    const pageH = screenshot?.document_height || container.clientHeight;
+    const img = container.querySelector("img");
+    const pageW = screenshot?.viewport_width  || img?.naturalWidth  || container.clientWidth;
+    const pageH = screenshot?.document_height || img?.naturalHeight || container.clientHeight;
 
-    // Canvas pixel dimensions match the inner page proportions
     const w = container.clientWidth;
     const h = Math.round(w * pageH / pageW);
 
@@ -174,12 +174,6 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, [redraw]);
-
-  // Padding-bottom % that gives the inner page its natural aspect ratio
-  const innerPagePadding =
-    screenshot?.viewport_width && screenshot?.document_height
-      ? `${(screenshot.document_height / screenshot.viewport_width) * 100}%`
-      : "56.25%"; // 16:9 fallback
 
   return (
     <div className="space-y-3">
@@ -217,21 +211,22 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
         className="relative w-full rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800"
         style={{ aspectRatio: "16 / 9" }}
       >
-        {/* Inner scrollable pane — hides the scrollbar visually */}
+        {/* Inner scrollable pane */}
         <div
           className="absolute inset-0 overflow-y-auto"
-          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+          style={{ scrollbarWidth: "thin", overscrollBehavior: "contain" }}
         >
-          {/* Inner page — proportional to full document height */}
-          <div style={{ position: "relative", width: "100%", paddingBottom: innerPagePadding }}>
+          {/* Inner page — height driven by img natural dimensions */}
+          <div style={{ position: "relative", width: "100%" }}>
 
-            {/* Screenshot */}
+            {/* Screenshot — block flow so div grows to full image height */}
             {screenshot?.url && (
               <img
                 src={screenshot.url}
                 alt="Page screenshot"
-                className="absolute inset-0 w-full h-full select-none pointer-events-none"
+                className="w-full block select-none pointer-events-none"
                 draggable={false}
+                onLoad={redraw}
               />
             )}
 
