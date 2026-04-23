@@ -328,6 +328,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         const tab = tabs[0];
         if (!tab?.id) { sendResponse({ ok: false, error: 'No active tab' }); return; }
         chrome.tabs.sendMessage(tab.id, { action: 'START', session_id }, (csResponse) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: 'content_script_not_ready' });
+            return;
+          }
           sendResponse({ ok: true, session_id, tracking: csResponse?.status === 'started' });
         });
       });

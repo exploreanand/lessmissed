@@ -21,8 +21,8 @@ function mode(arr) {
 }
 
 function buildFixation(samples, sessionId, projectId, pageUrl) {
-  const xs = samples.map((s) => s.data.x);
-  const ys = samples.map((s) => s.data.y);
+  const xs = samples.map((s) => s.data.x + (s.data.scroll_x ?? 0));
+  const ys = samples.map((s) => s.data.y + (s.data.scroll_y ?? 0));
   const elementIds = samples.map((s) => s.data.element_id).filter(Boolean);
   const elementId = mode(elementIds);
   const xpathSample = samples.find((s) => s.data.element_id === elementId);
@@ -46,7 +46,7 @@ export async function deriveFixations(sessionId, projectId) {
   // Fetch all gaze events for this session in chronological order
   const gazeEvents = await Event.find(
     { session_id: sessionId, type: "gaze" },
-    { "data.x": 1, "data.y": 1, "data.element_id": 1, "data.element_xpath": 1, timestamp: 1, page_url: 1 }
+    { "data.x": 1, "data.y": 1, "data.scroll_x": 1, "data.scroll_y": 1, "data.element_id": 1, "data.element_xpath": 1, timestamp: 1, page_url: 1 }
   )
     .sort({ timestamp: 1 })
     .lean();
@@ -68,8 +68,8 @@ export async function deriveFixations(sessionId, projectId) {
 
     for (let i = 1; i < samples.length; i++) {
       const candidate = [...window, samples[i]];
-      const xs = candidate.map((s) => s.data.x);
-      const ys = candidate.map((s) => s.data.y);
+      const xs = candidate.map((s) => s.data.x + (s.data.scroll_x ?? 0));
+      const ys = candidate.map((s) => s.data.y + (s.data.scroll_y ?? 0));
       const dispersion =
         Math.max(...xs) - Math.min(...xs) + (Math.max(...ys) - Math.min(...ys));
 

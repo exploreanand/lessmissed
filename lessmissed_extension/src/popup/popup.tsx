@@ -151,6 +151,12 @@ const App: React.FC = () => {
           page_url: pageUrl,
         },
         (res) => {
+          if (chrome.runtime.lastError) return;
+          if (res?.error === 'content_script_not_ready') {
+            setSsStatus('error');
+            setSsError('Reload the page (F5), then retry.');
+            return;
+          }
           if (res?.ok) {
             setIsTracking(true);
             setActiveSessionId(res.session_id);

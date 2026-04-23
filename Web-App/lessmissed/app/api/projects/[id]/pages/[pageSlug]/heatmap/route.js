@@ -46,12 +46,12 @@ export async function GET(request, { params }) {
       type: "click",
       ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
     })
-      .select("data.viewport_x data.viewport_y")
+      .select("data.viewport_x data.viewport_y data.scroll_x data.scroll_y")
       .lean();
 
     points = events.map((e) => ({
-      x: e.data?.viewport_x ?? 0,
-      y: e.data?.viewport_y ?? 0,
+      x: (e.data?.viewport_x ?? 0) + (e.data?.scroll_x ?? 0),
+      y: (e.data?.viewport_y ?? 0) + (e.data?.scroll_y ?? 0),
       value: 1,
     }));
   } else if (type === "cursor") {
@@ -61,13 +61,13 @@ export async function GET(request, { params }) {
       type: "cursor",
       ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
     })
-      .select("data.viewport_x data.viewport_y")
+      .select("data.viewport_x data.viewport_y data.scroll_x data.scroll_y")
       .limit(5000)
       .lean();
 
     points = events.map((e) => ({
-      x: e.data?.viewport_x ?? 0,
-      y: e.data?.viewport_y ?? 0,
+      x: (e.data?.viewport_x ?? 0) + (e.data?.scroll_x ?? 0),
+      y: (e.data?.viewport_y ?? 0) + (e.data?.scroll_y ?? 0),
       value: 1,
     }));
   } else if (type === "scroll") {

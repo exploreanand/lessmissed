@@ -89,7 +89,7 @@ document.addEventListener('mousemove', (e) => {
   queueEvent({
     type: 'cursor',
     page_url: currentUrl,
-    data: { viewport_x: e.clientX, viewport_y: e.clientY },
+    data: { viewport_x: e.clientX, viewport_y: e.clientY, scroll_x: window.scrollX, scroll_y: window.scrollY },
   });
 });
 
@@ -134,6 +134,8 @@ document.addEventListener('click', (e) => {
     data: {
       viewport_x: e.clientX,
       viewport_y: e.clientY,
+      scroll_x: window.scrollX,
+      scroll_y: window.scrollY,
       element_id: resolveElementId(el),
       element_xpath: resolveXPath(el),
       element_tag: el.tagName.toLowerCase(),
@@ -353,13 +355,16 @@ if (webgazer) {
     if (!hasAnchor) {
       anchorX = data.x; anchorY = data.y;
       hasAnchor = true;
-      bufX.push(data.x); bufY.push(data.y);
     } else {
       const dist = Math.sqrt((data.x - anchorX) ** 2 + (data.y - anchorY) ** 2);
-      if (dist > OUTLIER_THRESHOLD) return;
-      bufX.push(data.x); bufY.push(data.y);
-      if (bufX.length > BUFFER_SIZE) { bufX.shift(); bufY.shift(); }
+      if (dist > OUTLIER_THRESHOLD) {
+        // Saccade: gaze jumped to a new area — reset buffer to track the new fixation
+        bufX.length = 0; bufY.length = 0;
+        anchorX = data.x; anchorY = data.y;
+      }
     }
+    bufX.push(data.x); bufY.push(data.y);
+    if (bufX.length > BUFFER_SIZE) { bufX.shift(); bufY.shift(); }
 
     anchorX = bufX.reduce((s, v) => s + v, 0) / bufX.length;
     anchorY = bufY.reduce((s, v) => s + v, 0) / bufY.length;
@@ -375,6 +380,8 @@ if (webgazer) {
       data: {
         x: Math.round(anchorX),
         y: Math.round(anchorY),
+        scroll_x: window.scrollX,
+        scroll_y: window.scrollY,
         element_id: resolveElementId(el),
         element_xpath: resolveXPath(el),
         element_tag: el?.tagName.toLowerCase() ?? '',
