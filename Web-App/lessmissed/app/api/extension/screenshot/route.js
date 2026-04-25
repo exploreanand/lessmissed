@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { writeFile, mkdir } from "fs/promises";
-import { join } from "path";
 import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
+import { uploadToS3 } from "@/lib/s3";
 
 // POST /api/extension/screenshot
 // Body: { project_id, page_url, page_slug, image_base64, viewport_width, viewport_height,
@@ -45,30 +44,25 @@ export async function POST(request) {
 
   const canonicalSlug = resolvedPage.slug;
 
-  // Save full-page screenshot
+  // Upload full-page screenshot to S3
   const base64Data = image_base64.replace(/^data:image\/\w+;base64,/, "");
   const buffer = Buffer.from(base64Data, "base64");
 
-  const projectDir = join(process.cwd(), "public", "screenshots", project_id);
-  await mkdir(projectDir, { recursive: true });
-
   const filename = `${canonicalSlug}.jpg`;
-  await writeFile(join(projectDir, filename), buffer);
-  const screenshotUrl = `/screenshots/${project_id}/${filename}`;
+  const screenshotUrl = await uploadToS3(buffer, `screenshots/${project_id}/${filename}`);
 
-  // Save nav header image (optional)
+  // Upload nav header image to S3 (optional)
   let headerScreenshotUrl = null;
   if (header_image_base64 && header_height > 0) {
     const headerBase64Data = header_image_base64.replace(/^data:image\/\w+;base64,/, "");
     const headerBuffer = Buffer.from(headerBase64Data, "base64");
     const headerFilename = `${canonicalSlug}-header.jpg`;
-    await writeFile(join(projectDir, headerFilename), headerBuffer);
-    headerScreenshotUrl = `/screenshots/${project_id}/${headerFilename}`;
+    headerScreenshotUrl = await uploadToS3(headerBuffer, `screenshots/${project_id}/${headerFilename}`);
   }
 
   // Persist metadata to the project page document
   try {
-    await Project.updateOne(
+    const result = await Project.updateOne(
       { _id: project_id, "pages.slug": canonicalSlug },
       {
         $set: {
@@ -83,6 +77,9 @@ export async function POST(request) {
       },
       { strict: false }
     );
+    if (result.matchedCount === 0) {
+      console.warn(`[LessMissed] updateOne matched 0 docs — project_id=${project_id} slug=${canonicalSlug}`);
+    }
   } catch (err) {
     console.error("[LessMissed] Failed to update page screenshot metadata:", err.message);
   }
