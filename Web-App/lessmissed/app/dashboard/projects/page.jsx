@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
 import HealthBadge from "../../components/dashboard/HealthBadge";
+import DeleteProjectButton from "../../components/dashboard/DeleteProjectButton";
 
 function timeAgo(date) {
   if (!date) return "never";
@@ -80,12 +81,15 @@ export default async function ProjectsPage() {
                 <p className="text-xs text-zinc-400">
                   Last session {timeAgo(lastSession)}
                 </p>
-                <Link
-                  href={`/dashboard/projects/${id}`}
-                  className="text-xs font-semibold text-violet-600 dark:text-violet-400 hover:underline"
-                >
-                  View →
-                </Link>
+                <div className="flex items-center gap-3">
+                  <DeleteProjectButton projectId={id} projectName={project.name} />
+                  <Link
+                    href={`/dashboard/projects/${id}`}
+                    className="text-xs font-semibold text-violet-600 dark:text-violet-400 hover:underline"
+                  >
+                    View →
+                  </Link>
+                </div>
               </div>
             </div>
           );

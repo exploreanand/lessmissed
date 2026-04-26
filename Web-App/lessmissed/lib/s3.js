@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -18,4 +18,18 @@ export async function uploadToS3(buffer, key, contentType = "image/jpeg") {
     })
   );
   return `${process.env.AWS_S3_BASE_URL}/${key}`;
+}
+
+export async function deleteProjectFromS3(projectId) {
+  const prefix = `screenshots/${projectId}/`;
+  const listed = await s3.send(
+    new ListObjectsV2Command({ Bucket: process.env.AWS_S3_BUCKET, Prefix: prefix })
+  );
+  if (!listed.Contents?.length) return;
+  await s3.send(
+    new DeleteObjectsCommand({
+      Bucket: process.env.AWS_S3_BUCKET,
+      Delete: { Objects: listed.Contents.map((o) => ({ Key: o.Key })) },
+    })
+  );
 }
