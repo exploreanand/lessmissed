@@ -7,7 +7,8 @@ const MODES = ["gaze", "click", "scroll", "cursor"];
 const MODE_COLORS = {
   gaze:   { hot: "#ef4444", warm: "#f97316", cool: "#eab308", cold: "#22c55e" },
   click:  { hot: "#3b82f6", warm: "#6366f1", cool: "#8b5cf6", cold: "#a78bfa" },
-  scroll: { hot: "#ef4444", warm: "#f97316", cool: "#eab308", cold: "#22c55e" },
+  // Updated scroll cold color to Light Blue (#38bdf8)
+  scroll: { hot: "#ef4444", warm: "#f97316", cool: "#eab308", cold: "#38bdf8" },
   cursor: { hot: "#06b6d4", warm: "#0ea5e9", cool: "#38bdf8", cold: "#7dd3fc" },
 };
 
@@ -53,10 +54,26 @@ function renderHeatmap(canvas, points, containerWidth, containerHeight, pageWidt
 function ScrollDepthChart({ bands }) {
   if (!bands?.length) return null;
   const max = Math.max(...bands.map((b) => b.session_count), 1);
+  
   return (
     <>
       {bands.map((b) => {
-        const opacity = b.session_count / max;
+        const ratio = b.session_count / max;
+        
+        // Pick a color based on how much time was spent relative to the max
+        let colorStr;
+        if (ratio === 0) {
+          colorStr = "transparent"; // If they never scrolled here at all
+        } else if (ratio >= 0.75) {
+          colorStr = "rgba(239, 68, 68, 0.55)"; // Red (High Attention)
+        } else if (ratio >= 0.50) {
+          colorStr = "rgba(249, 115, 22, 0.55)"; // Orange
+        } else if (ratio >= 0.25) {
+          colorStr = "rgba(234, 179, 8, 0.55)"; // Yellow
+        } else {
+          colorStr = "rgba(56, 189, 248, 0.55)"; // Light Blue (Fast Scroll / Low Attention)
+        }
+
         return (
           <div
             key={b.band}
@@ -66,8 +83,8 @@ function ScrollDepthChart({ bands }) {
               right: 0,
               top: `${b.min}%`,
               height: `${b.max - b.min}%`,
-              backgroundColor: `rgba(239, 68, 68, ${opacity * 0.45})`,
-              borderBottom: "1px solid rgba(239, 68, 68, 0.15)",
+              backgroundColor: colorStr,
+              borderBottom: "1px solid rgba(255, 255, 255, 0.15)",
               pointerEvents: "none",
             }}
           >
@@ -83,7 +100,7 @@ function ScrollDepthChart({ bands }) {
                 fontFamily: "sans-serif",
               }}
             >
-              {b.band} · {b.session_count}
+              {b.band} · {b.session_count}s
             </span>
           </div>
         );

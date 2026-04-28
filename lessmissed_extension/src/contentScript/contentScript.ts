@@ -99,13 +99,29 @@ let scrollStopTimer: ReturnType<typeof setTimeout> | null = null;
 let prevScrollY = window.scrollY;
 const SCROLL_INTERVAL = 250;
 
-document.addEventListener('scroll', () => {
+function getDocHeight() {
+  return Math.max(
+    document.body.scrollHeight, document.documentElement.scrollHeight,
+    document.body.offsetHeight, document.documentElement.offsetHeight,
+    document.body.clientHeight, document.documentElement.clientHeight
+  );
+}
+
+window.addEventListener('scroll', (e) => {
   if (!isTracking) return;
 
-  const scrollH = document.body.scrollHeight - window.innerHeight;
-  const depth = scrollH > 0 ? Math.round((window.scrollY / scrollH) * 100) : 0;
-  const direction = window.scrollY >= prevScrollY ? 'down' : 'up';
-  prevScrollY = window.scrollY;
+  let currentScrollY = window.scrollY;
+  let scrollH = getDocHeight() - window.innerHeight;
+
+  if (e.target !== document && e.target !== window && (e.target as HTMLElement).scrollHeight) {
+      const el = e.target as HTMLElement;
+      currentScrollY = el.scrollTop;
+      scrollH = el.scrollHeight - el.clientHeight;
+  }
+
+  const depth = scrollH > 0 ? Math.round((currentScrollY / scrollH) * 100) : 0;
+  const direction = currentScrollY >= prevScrollY ? 'down' : 'up';
+  prevScrollY = currentScrollY;
 
   if (scrollStopTimer) clearTimeout(scrollStopTimer);
 
@@ -114,13 +130,10 @@ document.addEventListener('scroll', () => {
     queueEvent({ type: 'scroll', page_url: currentUrl, data: { depth_pct: depth, direction } });
   }
 
-  // Record the resting scroll depth ~200ms after scrolling stops
   scrollStopTimer = setTimeout(() => {
-    const h = document.body.scrollHeight - window.innerHeight;
-    const d = h > 0 ? Math.round((window.scrollY / h) * 100) : 0;
-    queueEvent({ type: 'scroll', page_url: currentUrl, data: { depth_pct: d, direction, is_stop: true } });
+    queueEvent({ type: 'scroll', page_url: currentUrl, data: { depth_pct: depth, direction, is_stop: true } });
   }, 200);
-}, { passive: true });
+}, { passive: true, capture: true });
 
 // ── Clicks (every event, capture phase) ─────────────────────────────────────
 const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'label', 'summary']);
@@ -158,6 +171,7 @@ function onRouteChange() {
   if (newUrl === currentUrl) return;
   queueEvent({ type: 'page_change', page_url: currentUrl, data: { from: currentUrl, to: newUrl } });
   currentUrl = newUrl;
+  prevScrollY = window.scrollY || 0;
 }
 
 const _pushState = history.pushState.bind(history);
@@ -237,7 +251,6 @@ function startCalibration(sendResponse: (response: any) => void) {
 // ── Message listener ─────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
-  // Background uses this for screenshot scroll-stitch
   if (request.action === 'GET_PAGE_DIMS') {
     sendResponse({
       viewportWidth: window.innerWidth,
@@ -245,6 +258,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       documentHeight: Math.max(
         document.body.scrollHeight,
         document.documentElement.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.offsetHeight,
         window.innerHeight
       ),
       scrollY: window.scrollY,
@@ -276,7 +291,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       sendResponse({ status: 'error', error: 'WebGazer not found' });
       return false;
     }
-    // session_id comes from background after it creates the session via the API
     currentSessionId = request.session_id ?? null;
     currentUrl = location.pathname + location.search;
     prevScrollY = window.scrollY;
@@ -323,7 +337,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       const pos = window.getComputedStyle(el).position;
       if (pos === 'fixed' || pos === 'sticky') {
         const rect = el.getBoundingClientRect();
-        // Track bottom edge of top-anchored fixed elements (nav bars)
         if (rect.top <= 5 && rect.bottom > headerHeight) {
           headerHeight = rect.bottom;
         }

@@ -4,6 +4,9 @@ import Project from "@/lib/models/Project";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 
+// Kills the Next.js cache so your heatmap always shows fresh data!
+export const dynamic = "force-dynamic";
+
 // GET /api/projects/:id/pages/:pageSlug/heatmap
 // Query: type (gaze|click|cursor|scroll), date_from, date_to
 export async function GET(request, { params }) {
@@ -25,7 +28,6 @@ export async function GET(request, { params }) {
   let points = [];
 
   if (type === "gaze") {
-    // Return fixation centers as weighted heatmap points (x, y, value=duration_ms)
     const fixations = await Fixation.find({
       project_id: id,
       page_url: page.path,
@@ -37,7 +39,7 @@ export async function GET(request, { params }) {
     points = fixations.map((f) => ({
       x: f.center_x,
       y: f.center_y,
-      value: Math.min(f.duration_ms / 100, 10), // normalise duration to 0-10 weight
+      value: Math.min(f.duration_ms / 100, 10),
     }));
   } else if (type === "click") {
     const events = await Event.find({
@@ -71,25 +73,63 @@ export async function GET(request, { params }) {
       value: 1,
     }));
   } else if (type === "scroll") {
-    // Return scroll depth distribution as a series of {depth_pct, session_count}
-    const sessions = await import("@/lib/models/Session").then((m) => m.default);
-    const scrollData = await sessions
-      .find({ project_id: id, status: "completed" })
-      .select("summary.max_scroll_depth_percent")
+    // --- ATTENTION SCROLL HEATMAP (Time Spent) ---
+    
+    // We fetch ALL events (cursor, gaze, click, visibility) to act as a continuous timer
+    const events = await Event.find({
+      "metadata.project_id": id,
+      page_url: page.path,
+      ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
+    })
+      .sort({ timestamp: 1 })
+      .select("timestamp session_id type data.depth_pct")
       .lean();
 
-    // Bucket into 10% bands
     const bands = Array.from({ length: 10 }, (_, i) => ({
       band: `${i * 10}-${(i + 1) * 10}%`,
       min: i * 10,
       max: (i + 1) * 10,
       session_count: 0,
     }));
-    scrollData.forEach((s) => {
-      const depth = s.summary?.max_scroll_depth_percent ?? 0;
-      const idx = Math.min(Math.floor(depth / 10), 9);
-      bands[idx].session_count++;
+
+    // Group all events by session
+    const sessionsEvents = {};
+    events.forEach((e) => {
+      if (!sessionsEvents[e.session_id]) sessionsEvents[e.session_id] = [];
+      sessionsEvents[e.session_id].push(e);
     });
+
+    Object.values(sessionsEvents).forEach((sessionArray) => {
+      let currentDepth = 0;
+      let lastTimestamp = null;
+
+      sessionArray.forEach((e) => {
+        if (lastTimestamp) {
+          // Calculate time passed since the last event (whether it was a scroll, mouse move, or click)
+          const timeDiffSeconds = (new Date(e.timestamp) - new Date(lastTimestamp)) / 1000;
+          
+          // Cap idle time at 30 seconds
+          const validTime = Math.min(Math.max(timeDiffSeconds, 0), 30);
+          
+          // Add that time to whatever depth the user is currently at
+          const idx = Math.min(Math.floor(currentDepth / 10), 9);
+          bands[idx].session_count += validTime;
+        }
+
+        // If they scrolled, update the depth for the next timer calculation
+        if (e.type === "scroll" && e.data?.depth_pct !== undefined) {
+          currentDepth = e.data.depth_pct;
+        }
+
+        lastTimestamp = e.timestamp;
+      });
+    });
+
+    // Round to 1 decimal place (e.g., 0.3s)
+    bands.forEach((band) => {
+      band.session_count = Math.round(band.session_count * 10) / 10;
+    });
+
     return NextResponse.json({ type, page_path: page.path, scroll_depth_bands: bands });
   }
 
