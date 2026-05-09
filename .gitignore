@@ -1,5 +1,15 @@
-# Added by code-review-graph
+# AI tool configs (local only)
+.claude/
+.cursor/
+.kiro/
 .code-review-graph/
+.cursorrules
+.windsurfrules
+.mcp.json
+.opencode.json
+CLAUDE.md
+AGENTS.md
+GEMINI.md
 
 # Dependencies
 node_modules/
