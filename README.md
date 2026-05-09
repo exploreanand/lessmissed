@@ -56,12 +56,6 @@ cp .env.example .env.local   # fill in MONGODB_URI, AWS credentials, etc.
 npm run dev                  # http://localhost:3000
 ```
 
-Seed the database:
-
-```bash
-npm run seed
-```
-
 ---
 
 ## Chrome Extension
