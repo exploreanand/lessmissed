@@ -5,6 +5,7 @@ import Project from "@/lib/models/Project";
 import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
+import { computeFirstFixation } from "@/lib/insights/firstFixation";
 import HeatmapViewer from "./HeatmapViewer";
 import InsightCatalog from "./InsightCatalog";
 
@@ -50,7 +51,7 @@ export default async function PageDetailPage({ params }) {
   };
 
   // Element-level data from fixations + clicks for this page's exact path
-  const [fixationAgg, clickAgg] = await Promise.all([
+  const [fixationAgg, clickAgg, firstFixation] = await Promise.all([
     Fixation.aggregate([
       { $match: { project_id: project._id, page_url: page.path } },
       {
@@ -79,6 +80,8 @@ export default async function PageDetailPage({ params }) {
         },
       },
     ]),
+    // INS-G04: first 200ms+ fixation per session, aggregated into first-look regions
+    computeFirstFixation(project, page),
   ]);
 
   const clickMap = {};
@@ -123,6 +126,8 @@ export default async function PageDetailPage({ params }) {
     avg_scroll_depth_pct: avgScrollDepth,
     scroll_reach: scrollReach,
     avg_dwell_ms: avgDwellMs,
+    // INS-G04
+    first_fixation: firstFixation,
     looked_not_clicked: lookedNotClicked,
     total_unique_elements_seen: fixationAgg.length,
     total_rage_clicks:   sessions.reduce((a, s) => a + (s.summary?.rage_clicks    ?? 0), 0),

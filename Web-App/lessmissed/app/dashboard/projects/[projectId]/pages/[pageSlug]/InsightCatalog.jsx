@@ -26,7 +26,7 @@ const ALL_INSIGHTS = {
     { id: "INS-G01", name: "Gaze Heatmap",                 phase: 1, desc: "Aggregated fixation coordinates weighted by dwell time. Thermal overlay showing where users look most." },
     { id: "INS-G02", name: "Element Attention Ranking",     phase: 1, desc: "Fixation count and dwell per element. Ranked list of what gets seen — unique vs click-only tools." },
     { id: "INS-G03", name: "Missed Elements",               phase: 1, desc: "Elements with zero fixations across sessions. What your users never see." },
-    { id: "INS-G04", name: "First Fixation Point",          phase: 2, desc: "First 200ms+ fixation after page load per session. Most common region users look at first." },
+    { id: "INS-G04", name: "First Fixation Point",          phase: 1, desc: "First 200ms+ fixation after page load per session. Most common region users look at first." },
     { id: "INS-G05", name: "Fixation Duration per Element", phase: 2, desc: "Average and median dwell time per element. Long fixation = interest OR confusion (context-dependent)." },
     { id: "INS-G06", name: "Scan Path / Reading Order",     phase: 2, desc: "Most common fixation subsequences across sessions. Reveals actual vs intended reading flow." },
     { id: "INS-G07", name: "Backtracking / Re-reading",     phase: 2, desc: "User returns to a previously fixated element. Signals confusion or comparison behavior." },
@@ -210,6 +210,86 @@ function MissedElementsCard({ ins, catId, elements }) {
         <p className="text-xs text-emerald-600 dark:text-emerald-400">All tracked elements have at least some attention</p>
       )}
       <p className="text-xs text-zinc-400 dark:text-zinc-500">Threshold: &lt;10% of sessions with fixation</p>
+    </LiveCard>
+  );
+}
+
+function FirstFixationCard({ ins, catId, insights }) {
+  const ff = insights.first_fixation;
+
+  if (!ff || ff.sessions_with_first_fixation === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <p className="text-xs text-zinc-400">No first-fixation data for this page yet.</p>
+      </LiveCard>
+    );
+  }
+
+  const topRegion = ff.top_region;
+  const maxCell = Math.max(...ff.regions.map((r) => r.session_count), 1);
+  const top3 = ff.top_elements.slice(0, 3);
+  const maxElement = top3[0]?.session_count ?? 1;
+  const medianSec =
+    ff.median_time_to_first_ms > 0 ? (ff.median_time_to_first_ms / 1000).toFixed(1) : "—";
+
+  return (
+    <LiveCard ins={ins} catId={catId}>
+      <div className="flex gap-6">
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {topRegion?.pct ?? 0}%
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            look at {topRegion?.label.toLowerCase() ?? "—"} first
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">{medianSec}s</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">median time to first look</p>
+        </div>
+      </div>
+
+      {/* 3×3 first-look region map — one cell per screen third */}
+      <div className="grid grid-cols-3 gap-0.5 w-24">
+        {ff.regions.map((cell) => (
+          <div
+            key={cell.index}
+            title={`${cell.label} · ${cell.pct}%`}
+            className={`aspect-square rounded-sm ${S[catId].bar}`}
+            style={{ opacity: 0.15 + 0.85 * (cell.session_count / maxCell) }}
+          />
+        ))}
+      </div>
+
+      <div className="space-y-2.5">
+        {top3.map((el) => (
+          <div key={el.element_id}>
+            <div className="flex justify-between mb-1">
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]">{el.element_id}</span>
+              <span className="text-xs font-semibold text-zinc-500 ml-2 flex-shrink-0">{el.pct}%</span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${S[catId].bar}`}
+                style={{ width: `${Math.round((el.session_count / maxElement) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        First 200ms+ fixation in {ff.sessions_with_first_fixation} of {ff.total_sessions} sessions
+        {ff.below_fold_pct != null && ` · ${100 - ff.below_fold_pct}% above the fold`}
+      </p>
+
+      {ff.region_basis === "observed" && (
+        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+          Regions estimated from gaze bounds — capture a page screenshot for exact regions
+        </p>
+      )}
+
+      <p className={`text-xs font-medium ${S[catId].text}`}>↑ Switch to First look mode in the viewer above</p>
     </LiveCard>
   );
 }
@@ -406,6 +486,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-G01":  return <GazeHeatmapCard       ins={ins} catId={catId} insights={insights} elements={elements} />;
     case "INS-G02":  return <ElementAttentionCard   ins={ins} catId={catId} elements={elements} />;
     case "INS-G03":  return <MissedElementsCard     ins={ins} catId={catId} elements={elements} />;
+    case "INS-G04":  return <FirstFixationCard      ins={ins} catId={catId} insights={insights} />;
     case "INS-S01":  return <ScrollDepthCard        ins={ins} catId={catId} insights={insights} />;
     case "INS-C01":  return <ClickHeatmapCard       ins={ins} catId={catId} elements={elements} />;
     case "INS-GC01": return <LookedButDidntClickCard ins={ins} catId={catId} insights={insights} />;

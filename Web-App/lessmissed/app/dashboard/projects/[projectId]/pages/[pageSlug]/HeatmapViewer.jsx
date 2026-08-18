@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const MODES = ["gaze", "click", "scroll", "cursor"];
+const MODES = ["gaze", "click", "scroll", "cursor", "first_fixation"];
+
+// Mode ids double as the ?type= query param, so multi-word ids need a display label —
+// `capitalize` alone would render "First_fixation".
+const MODE_LABELS = { first_fixation: "First look" };
 
 const MODE_COLORS = {
   gaze:   { hot: "#ef4444", warm: "#f97316", cool: "#eab308", cold: "#22c55e" },
@@ -10,6 +14,8 @@ const MODE_COLORS = {
   // Updated scroll cold color to Light Blue (#38bdf8)
   scroll: { hot: "#ef4444", warm: "#f97316", cool: "#eab308", cold: "#38bdf8" },
   cursor: { hot: "#06b6d4", warm: "#0ea5e9", cool: "#38bdf8", cold: "#7dd3fc" },
+  // Violet family — INS-G04 belongs to the gaze insight category
+  first_fixation: { hot: "#7c3aed", warm: "#8b5cf6", cool: "#a78bfa", cold: "#c4b5fd" },
 };
 
 // ---------------------------------------------------------------------------
@@ -110,6 +116,86 @@ function ScrollDepthChart({ bands }) {
 }
 
 // ---------------------------------------------------------------------------
+// INS-G04: First-look overlay — one marker per session's first 200ms+ fixation,
+// plus a rect around the most common first-look region.
+// Positioned with percentage divs rather than the canvas: the region carries a text
+// caption, and the canvas is multiply-blended and not DPR-scaled, so text on it would
+// be muddy and would tint the screenshot. Percentages track the width:100% image for
+// free — no resize bookkeeping — and one marker per session is far too few to need a canvas.
+// ---------------------------------------------------------------------------
+function FirstLookOverlay({ data }) {
+  const { markers = [], top_region: region } = data ?? {};
+  if (!markers.length) return null;
+
+  return (
+    <>
+      {region?.w_pct != null && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${region.x_pct}%`,
+            top: `${region.y_pct}%`,
+            width: `${region.w_pct}%`,
+            height: `${region.h_pct}%`,
+            border: "2px solid #7c3aed",
+            backgroundColor: "rgba(139, 92, 246, 0.18)",
+            borderRadius: 8,
+            pointerEvents: "none",
+            // Above the fixed-nav overlay (z-index 20) — a first-look region at the top
+            // of the page would otherwise sit underneath it, caption and all
+            zIndex: 21,
+          }}
+        >
+          {/* Solid chip rather than the shadowed white text ScrollDepthChart uses —
+              that reads over saturated bands, but this fill is only 18% opacity over
+              an arbitrary screenshot, so the label needs its own background. */}
+          <span
+            style={{
+              position: "absolute",
+              left: 6,
+              top: 6,
+              fontSize: 10,
+              lineHeight: 1.6,
+              color: "white",
+              backgroundColor: "#7c3aed",
+              padding: "0 6px",
+              borderRadius: 4,
+              whiteSpace: "nowrap",
+              fontFamily: "sans-serif",
+            }}
+          >
+            {region.label} · {region.pct}% look here first
+          </span>
+        </div>
+      )}
+
+      {markers.map((m) =>
+        m.x_pct == null ? null : (
+          <div
+            key={m.session_id}
+            title={`${m.element_id} · ${m.duration_ms}ms`}
+            style={{
+              position: "absolute",
+              left: `${m.x_pct}%`,
+              top: `${m.y_pct}%`,
+              width: 10,
+              height: 10,
+              marginLeft: -5,
+              marginTop: -5,
+              borderRadius: "50%",
+              backgroundColor: "rgba(124, 58, 237, 0.75)",
+              boxShadow: "0 0 0 2px rgba(255, 255, 255, 0.6)",
+              pointerEvents: "none",
+              zIndex: 21,
+            }}
+          />
+        )
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -118,6 +204,7 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
   const [screenshot, setScreenshot]   = useState(null);
   const [points, setPoints]           = useState([]);
   const [scrollBands, setScrollBands] = useState(null);
+  const [firstLook, setFirstLook]     = useState(null);
   const [loading, setLoading]         = useState(false);
   const [noScreenshot, setNoScreenshot] = useState(false);
 
@@ -146,11 +233,14 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     setLoading(true);
     setPoints([]);
     setScrollBands(null);
+    setFirstLook(null);
 
     fetch(`/api/projects/${projectId}/pages/${pageSlug}/heatmap?type=${mode}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.scroll_depth_bands) {
+        if (data.first_fixation) {
+          setFirstLook(data.first_fixation);
+        } else if (data.scroll_depth_bands) {
           setScrollBands(data.scroll_depth_bands);
         } else {
           setPoints(data.points ?? []);
@@ -164,7 +254,7 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container || scrollBands) return;
+    if (!canvas || !container || scrollBands || firstLook) return;
 
     const img = container.querySelector("img");
     const pageW = screenshot?.viewport_width  || img?.naturalWidth  || container.clientWidth;
@@ -177,7 +267,7 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
     canvas.height = h;
 
     renderHeatmap(canvas, points, w, h, pageW, pageH, MODE_COLORS[mode]);
-  }, [points, screenshot, mode, scrollBands]);
+  }, [points, screenshot, mode, scrollBands, firstLook]);
 
   useEffect(() => {
     redraw();
@@ -200,19 +290,21 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
           <button
             key={m}
             onClick={() => setMode(m)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium capitalize transition-colors ${
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              MODE_LABELS[m] ? "" : "capitalize"
+            } ${
               mode === m
                 ? "bg-violet-600 text-white"
                 : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
             }`}
           >
-            {m}
+            {MODE_LABELS[m] ?? m}
           </button>
         ))}
 
-        {!loading && points.length > 0 && (
+        {!loading && (points.length > 0 || firstLook?.markers?.length > 0) && (
           <span className="ml-auto self-center text-xs text-zinc-400">
-            {points.length.toLocaleString()} data points
+            {(points.length || firstLook.markers.length).toLocaleString()} data points
           </span>
         )}
         {loading && (
@@ -248,7 +340,7 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
             )}
 
             {/* Heatmap canvas */}
-            {mode !== "scroll" && (
+            {mode !== "scroll" && mode !== "first_fixation" && (
               <canvas
                 ref={canvasRef}
                 className="absolute inset-0 w-full h-full pointer-events-none"
@@ -259,6 +351,11 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
             {/* Scroll depth bands — overlaid on the full page height */}
             {mode === "scroll" && scrollBands && (
               <ScrollDepthChart bands={scrollBands} />
+            )}
+
+            {/* INS-G04: first-look markers + most common first-look region */}
+            {mode === "first_fixation" && firstLook && (
+              <FirstLookOverlay data={firstLook} />
             )}
 
           </div>
@@ -299,9 +396,11 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
         )}
 
         {/* Empty data notice */}
-        {!noScreenshot && !loading && points.length === 0 && !scrollBands && (
+        {!noScreenshot && !loading && points.length === 0 && !scrollBands && !firstLook?.markers?.length && (
           <div className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1.5">
-            <p className="text-xs text-zinc-300">No {mode} data yet for this page</p>
+            <p className="text-xs text-zinc-300">
+              No {(MODE_LABELS[mode] ?? mode).toLowerCase()} data yet for this page
+            </p>
           </div>
         )}
 

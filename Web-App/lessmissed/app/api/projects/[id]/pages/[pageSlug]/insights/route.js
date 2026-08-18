@@ -4,6 +4,7 @@ import Project from "@/lib/models/Project";
 import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
+import { computeFirstFixation } from "@/lib/insights/firstFixation";
 
 // GET /api/projects/:id/pages/:pageSlug/insights
 // Returns all Phase 1 computed insights for a page
@@ -47,6 +48,9 @@ export async function GET(request, { params }) {
     project_id: project._id,
     page_url: page.path,
   });
+
+  // INS-G04: First fixation point
+  const firstFixation = await computeFirstFixation(project, page);
 
   // Rage + dead clicks from session summaries
   const totalRageClicks = acceptedSessions.reduce((a, s) => a + (s.summary?.rage_clicks ?? 0), 0);
@@ -107,6 +111,8 @@ export async function GET(request, { params }) {
       looked_not_clicked: lookedNotClicked,
       // INS-G03
       total_unique_elements_seen: allElements.length,
+      // INS-G04
+      first_fixation: firstFixation,
       // Aggregate click signals
       total_rage_clicks: totalRageClicks,
       total_dead_clicks: totalDeadClicks,

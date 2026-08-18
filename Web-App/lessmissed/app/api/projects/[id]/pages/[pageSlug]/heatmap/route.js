@@ -3,12 +3,13 @@ import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
+import { computeFirstFixation } from "@/lib/insights/firstFixation";
 
 // Kills the Next.js cache so your heatmap always shows fresh data!
 export const dynamic = "force-dynamic";
 
 // GET /api/projects/:id/pages/:pageSlug/heatmap
-// Query: type (gaze|click|cursor|scroll), date_from, date_to
+// Query: type (gaze|click|cursor|scroll|first_fixation), date_from, date_to
 export async function GET(request, { params }) {
   await connectDB();
   const { id, pageSlug } = await params;
@@ -131,6 +132,10 @@ export async function GET(request, { params }) {
     });
 
     return NextResponse.json({ type, page_path: page.path, scroll_depth_bands: bands });
+  } else if (type === "first_fixation") {
+    // INS-G04: distinct payload — first-look markers + region, not a points cloud
+    const firstFixation = await computeFirstFixation(project, page);
+    return NextResponse.json({ type, page_path: page.path, first_fixation: firstFixation });
   }
 
   return NextResponse.json({ type, page_path: page.path, points, total: points.length });
