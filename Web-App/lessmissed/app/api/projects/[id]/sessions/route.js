@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongoose";
 import Session from "@/lib/models/Session";
+import { getSessionUser } from "@/lib/auth/session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 
 // GET /api/projects/:id/sessions
 // Query: page, status, min_score, date_from, date_to, limit, offset
 export async function GET(request, { params }) {
-  await connectDB();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
   const { id } = await params;
+  const project = await getOwnedProject(id, user);
+  if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const { searchParams } = new URL(request.url);
 
   const filter = { project_id: id };

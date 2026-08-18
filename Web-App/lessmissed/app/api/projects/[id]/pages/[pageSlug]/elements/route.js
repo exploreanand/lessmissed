@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongoose";
-import Project from "@/lib/models/Project";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 import Session from "@/lib/models/Session";
+import { getSessionUser } from "@/lib/auth/session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 
 // GET /api/projects/:id/pages/:pageSlug/elements
 // Returns element-level attention: fixation_count, dwell_ms, click_count,
 //         looked_not_clicked_rate, attention_to_action_ratio
 export async function GET(request, { params }) {
-  await connectDB();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
   const { id, pageSlug } = await params;
 
-  const project = await Project.findById(id).lean();
+  const project = await getOwnedProject(id, user);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const page = project.pages.find((p) => p.slug === pageSlug);
   if (!page) return NextResponse.json({ error: "Page not found" }, { status: 404 });

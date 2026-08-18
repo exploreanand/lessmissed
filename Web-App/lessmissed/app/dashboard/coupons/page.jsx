@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { connectDB } from "@/lib/mongoose";
 import Coupon from "@/lib/models/Coupon";
+import { getSessionUser } from "@/lib/auth/session";
 
 function statusBadge(status) {
   const styles = {
@@ -20,8 +21,9 @@ function couponTypeLabel(c) {
 }
 
 export default async function CouponsPage() {
+  const user = await getSessionUser();
   await connectDB();
-  const coupons = await Coupon.find({}).sort({ created_at: -1 }).lean();
+  const coupons = await Coupon.find({ client_id: user.userId }).sort({ created_at: -1 }).lean();
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto">

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/lib/models/User";
+import { SESSION_COOKIE } from "@/lib/auth/session";
 
 export async function POST(request) {
   await connectDB();
@@ -39,9 +40,9 @@ export async function POST(request) {
     { ok: true, userId: user._id.toString(), name: user.name },
     { status: 201 }
   );
-  response.cookies.set("lessmissed_session", user._id.toString(), {
+  response.cookies.set(SESSION_COOKIE, user._id.toString(), {
     path: "/",
-    httpOnly: false,
+    httpOnly: true,
     maxAge: 86400 * 7,
     sameSite: "lax",
   });

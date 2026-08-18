@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongoose";
-import Project from "@/lib/models/Project";
+import { getSessionUser } from "@/lib/auth/session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 
 // GET /api/projects/:id/pages/:pageSlug/screenshot
 // Returns: { url, viewport_width, viewport_height, document_height } or 404
 export async function GET(request, { params }) {
-  await connectDB();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
   const { id, pageSlug } = await params;
 
-  const project = await Project.findById(id).lean();
+  const project = await getOwnedProject(id, user);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const page = project.pages.find((p) => p.slug === pageSlug);

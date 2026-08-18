@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
+import { getSessionUser } from "@/lib/auth/session";
 
 // GET /api/extension/resolve?domain=suvria.com
 // Reads the lessmissed_session cookie (= MongoDB userId) and finds the project
 // belonging to that user whose domain matches the requested domain.
 export async function GET(request) {
   try {
-    const cookieStore = await cookies();
-    const session = cookieStore.get("lessmissed_session");
-
-    if (!session?.value || session.value === "demo") {
+    const user = await getSessionUser();
+    if (!user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -29,7 +27,7 @@ export async function GET(request) {
 
     // Try exact match first, then www. variant
     const project = await Project.findOne({
-      client_id: session.value,
+      client_id: user.userId,
       domain: { $in: [domain, `www.${domain}`] },
     })
       .select("_id name domain pages")
@@ -40,7 +38,7 @@ export async function GET(request) {
     }
 
     return NextResponse.json({
-      consumer_id: session.value,
+      consumer_id: user.userId,
       project_id: project._id.toString(),
       project_name: project.name,
       domain: project.domain,

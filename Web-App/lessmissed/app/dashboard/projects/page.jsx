@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
+import { getSessionUser } from "@/lib/auth/session";
 import HealthBadge from "../../components/dashboard/HealthBadge";
 import DeleteProjectButton from "../../components/dashboard/DeleteProjectButton";
 
@@ -15,8 +16,9 @@ function timeAgo(date) {
 }
 
 export default async function ProjectsPage() {
+  const user = await getSessionUser();
   await connectDB();
-  const projects = await Project.find({}).sort({ created_at: -1 }).lean();
+  const projects = await Project.find({ client_id: user.userId }).sort({ created_at: -1 }).lean();
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto">

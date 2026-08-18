@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { connectDB } from "@/lib/mongoose";
 import Session from "@/lib/models/Session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 import HealthBadge from "../../../../../components/dashboard/HealthBadge";
 import ReplayPlayer from "./ReplayPlayer";
 
@@ -23,7 +23,9 @@ function formatDuration(ms) {
 
 export default async function SessionReplayPage({ params }) {
   const { projectId, sessionId } = await params;
-  await connectDB();
+
+  const project = await getOwnedProject(projectId);
+  if (!project) notFound();
 
   // sessionId in URL is the session_id string (e.g. sess_abc123)
   const session = await Session.findOne({

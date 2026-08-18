@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const insights = [
   {
@@ -49,9 +49,15 @@ const settings = [
 
 export default function Sidebar({ mobileOpen, onClose }) {
   const pathname = usePathname();
+  const router = useRouter();
 
   function isActive(href) {
     return pathname === href || pathname.startsWith(href + "/");
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
   }
 
   const navItem = (item) => (
@@ -95,16 +101,16 @@ export default function Sidebar({ mobileOpen, onClose }) {
 
       {/* Log out */}
       <div className="px-3 py-4 border-t border-zinc-800">
-        <Link
-          href="/login"
-          onClick={() => { document.cookie = "lessmissed_session=; path=/; max-age=0"; }}
-          className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
           </svg>
           Log out
-        </Link>
+        </button>
       </div>
     </div>
   );

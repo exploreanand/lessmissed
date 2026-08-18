@@ -1,24 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { connectDB } from "@/lib/mongoose";
-import Project from "@/lib/models/Project";
 import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
+import { getOwnedProject } from "@/lib/auth/ownership";
 import HeatmapViewer from "./HeatmapViewer";
 import InsightCatalog from "./InsightCatalog";
 
 export default async function PageDetailPage({ params }) {
   const { projectId, pageSlug } = await params;
-  await connectDB();
 
-  let project;
-  try {
-    project = await Project.findById(projectId).lean();
-  } catch {
-    notFound();
-  }
+  const project = await getOwnedProject(projectId);
   if (!project) notFound();
 
   const page = project.pages.find((p) => p.slug === pageSlug);

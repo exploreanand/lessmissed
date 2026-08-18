@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongoose";
-import Project from "@/lib/models/Project";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
+import { getSessionUser } from "@/lib/auth/session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 
 // Kills the Next.js cache so your heatmap always shows fresh data!
 export const dynamic = "force-dynamic";
@@ -11,13 +11,15 @@ export const dynamic = "force-dynamic";
 // GET /api/projects/:id/pages/:pageSlug/heatmap
 // Query: type (gaze|click|cursor|scroll|first_fixation), date_from, date_to
 export async function GET(request, { params }) {
-  await connectDB();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
   const { id, pageSlug } = await params;
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type") ?? "gaze";
 
   // Resolve page path from slug
-  const project = await Project.findById(id).lean();
+  const project = await getOwnedProject(id, user);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const page = project.pages.find((p) => p.slug === pageSlug);
   if (!page) return NextResponse.json({ error: "Page not found" }, { status: 404 });

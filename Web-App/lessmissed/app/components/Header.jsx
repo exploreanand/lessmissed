@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export default function Header() {
+export default function Header({ user }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const pathname = usePathname();
 
@@ -56,18 +56,29 @@ export default function Header() {
 
         {/* Desktop CTAs */}
         <div className="hidden items-center gap-4 md:flex">
-          <Link
-            href="/login"
-            className="text-sm font-medium text-zinc-700 hover:text-violet-600 dark:text-zinc-300 dark:hover:text-violet-400"
-          >
-            Log in
-          </Link>
-          <Link
-            href="/signup"
-            className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
-          >
-            Sign up
-          </Link>
+          {user ? (
+            <Link
+              href="/dashboard/projects"
+              className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
+            >
+              Go to dashboard
+            </Link>
+          ) : (
+            <>
+              <Link
+                href="/login"
+                className="text-sm font-medium text-zinc-700 hover:text-violet-600 dark:text-zinc-300 dark:hover:text-violet-400"
+              >
+                Log in
+              </Link>
+              <Link
+                href="/signup"
+                className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
+              >
+                Sign up
+              </Link>
+            </>
+          )}
         </div>
 
         {/* Mobile Hamburger */}
@@ -106,18 +117,29 @@ export default function Header() {
               </Link>
             ))}
             <div className="mt-4 flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-              <Link
-                href="/login"
-                className="block text-base font-semibold text-zinc-900 dark:text-zinc-50"
-              >
-                Log in
-              </Link>
-              <Link
-                href="/signup"
-                className="block w-full rounded-md bg-violet-600 px-3 py-2 text-center text-base font-semibold text-white hover:bg-violet-500"
-              >
-                Sign up
-              </Link>
+              {user ? (
+                <Link
+                  href="/dashboard/projects"
+                  className="block w-full rounded-md bg-violet-600 px-3 py-2 text-center text-base font-semibold text-white hover:bg-violet-500"
+                >
+                  Go to dashboard
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    href="/login"
+                    className="block text-base font-semibold text-zinc-900 dark:text-zinc-50"
+                  >
+                    Log in
+                  </Link>
+                  <Link
+                    href="/signup"
+                    className="block w-full rounded-md bg-violet-600 px-3 py-2 text-center text-base font-semibold text-white hover:bg-violet-500"
+                  >
+                    Sign up
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>

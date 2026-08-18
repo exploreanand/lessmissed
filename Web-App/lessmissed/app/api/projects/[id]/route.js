@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { connectDB } from "@/lib/mongoose";
 import Project from "@/lib/models/Project";
 import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
@@ -9,40 +7,43 @@ import Task from "@/lib/models/Task";
 import Coupon from "@/lib/models/Coupon";
 import ConsumerReward from "@/lib/models/ConsumerReward";
 import { deleteProjectFromS3 } from "@/lib/s3";
+import { getSessionUser } from "@/lib/auth/session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 
 // GET /api/projects/:id
 export async function GET(request, { params }) {
-  await connectDB();
-  const project = await Project.findById(params.id).lean();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const { id } = await params;
+  const project = await getOwnedProject(id, user);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(project);
 }
 
 // PUT /api/projects/:id
 export async function PUT(request, { params }) {
-  await connectDB();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const { id } = await params;
+  const existing = await getOwnedProject(id, user);
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const body = await request.json();
-  const project = await Project.findByIdAndUpdate(params.id, body, { new: true }).lean();
-  if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const project = await Project.findByIdAndUpdate(id, body, { new: true }).lean();
   return NextResponse.json(project);
 }
 
 // DELETE /api/projects/:id
 export async function DELETE(request, { params }) {
   try {
-    const cookieStore = await cookies();
-    const session = cookieStore.get("lessmissed_session");
-    if (!session?.value || session.value === "demo") {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
+    const user = await getSessionUser();
+    if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-    await connectDB();
     const { id } = await params;
-    const project = await Project.findById(id).lean();
+    const project = await getOwnedProject(id, user);
     if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    if (project.client_id.toString() !== session.value) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
 
     const couponIds = await Coupon.find({ project_id: id }).distinct("_id");
 

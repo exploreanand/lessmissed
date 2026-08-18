@@ -1,20 +1,13 @@
 import { notFound } from "next/navigation";
-import { connectDB } from "@/lib/mongoose";
-import Project from "@/lib/models/Project";
 import Session from "@/lib/models/Session";
+import { getOwnedProject } from "@/lib/auth/ownership";
 import StatCard from "../../../components/dashboard/StatCard";
 import ProjectTabs from "./ProjectTabs";
 
 export default async function ProjectDetailPage({ params }) {
   const { projectId } = await params;
-  await connectDB();
 
-  let project;
-  try {
-    project = await Project.findById(projectId).lean();
-  } catch {
-    notFound();
-  }
+  const project = await getOwnedProject(projectId);
   if (!project) notFound();
 
   // Fetch sessions for this project
