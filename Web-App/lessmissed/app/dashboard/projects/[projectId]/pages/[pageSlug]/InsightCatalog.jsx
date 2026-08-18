@@ -130,7 +130,7 @@ function GazeHeatmapCard({ ins, catId, insights, elements }) {
   const seen = elements.filter((e) => e.pct >= 10).length;
   const coverage = elements.length > 0 ? Math.round((seen / elements.length) * 100) : 0;
   const avgDwellSec = insights.avg_dwell_ms > 0 ? (insights.avg_dwell_ms / 1000).toFixed(1) : "—";
-  const topElement = elements[0]?.element_id ?? "—";
+  const topElement = elements[0]?.label ?? elements[0]?.element_id ?? "—";
 
   return (
     <LiveCard ins={ins} catId={catId}>
@@ -168,9 +168,9 @@ function ElementAttentionCard({ ins, catId, elements }) {
     <LiveCard ins={ins} catId={catId}>
       <div className="space-y-2.5">
         {top5.map((el) => (
-          <div key={el.element_id}>
+          <div key={el.key ?? el.element_id}>
             <div className="flex justify-between mb-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]">{el.element_id}</span>
+              <span title={el.element_id} className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]">{el.label ?? el.element_id}</span>
               <span className="text-xs font-semibold text-zinc-500 ml-2 flex-shrink-0">{el.fixation_count}</span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
@@ -199,9 +199,9 @@ function MissedElementsCard({ ins, catId, elements }) {
       {missed.length > 0 ? (
         <div className="space-y-2">
           {missed.slice(0, 4).map((el) => (
-            <div key={el.element_id} className="flex items-center gap-2">
+            <div key={el.key ?? el.element_id} className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0" />
-              <span className="text-xs text-zinc-700 dark:text-zinc-300 truncate">{el.element_id}</span>
+              <span title={el.element_id} className="text-xs text-zinc-700 dark:text-zinc-300 truncate">{el.label ?? el.element_id}</span>
               <span className="ml-auto text-xs text-zinc-400 flex-shrink-0">{el.pct}%</span>
             </div>
           ))}
@@ -263,9 +263,9 @@ function FirstFixationCard({ ins, catId, insights }) {
 
       <div className="space-y-2.5">
         {top3.map((el) => (
-          <div key={el.element_id}>
+          <div key={el.key ?? el.element_id}>
             <div className="flex justify-between mb-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]">{el.element_id}</span>
+              <span title={el.element_id} className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]">{el.label ?? el.element_id}</span>
               <span className="text-xs font-semibold text-zinc-500 ml-2 flex-shrink-0">{el.pct}%</span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
@@ -346,7 +346,7 @@ function ClickHeatmapCard({ ins, catId, elements }) {
       </div>
       {topClicked && (
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Top target: <span className="font-medium text-zinc-700 dark:text-zinc-300 truncate">{topClicked.element_id}</span>
+          Top target: <span title={topClicked.element_id} className="font-medium text-zinc-700 dark:text-zinc-300 truncate">{topClicked.label ?? topClicked.element_id}</span>
         </p>
       )}
       <p className={`text-xs font-medium ${S[catId].text}`}>↑ Switch to Click mode in the viewer above</p>
@@ -383,7 +383,7 @@ function LookedButDidntClickCard({ ins, catId, insights }) {
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">Top friction element</p>
           <p className="text-base font-bold text-zinc-900 dark:text-zinc-50 leading-snug">
             {top.pct_looked}% of users fixated on{" "}
-            <span className={`${S[catId].text} truncate`}>{top.element_id}</span>
+            <span title={top.element_id} className={`${S[catId].text} truncate`}>{top.label ?? top.element_id}</span>
           </p>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
             Only <span className="font-semibold text-zinc-700 dark:text-zinc-200">{top.pct_clicked}%</span> clicked —
@@ -402,8 +402,8 @@ function LookedButDidntClickCard({ ins, catId, insights }) {
       <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3 space-y-2">
         <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">All friction elements</p>
         {items.map((item) => (
-          <div key={item.element_id} className="flex items-center gap-3 text-xs">
-            <span className="truncate text-zinc-600 dark:text-zinc-400 w-36 flex-shrink-0">{item.element_id}</span>
+          <div key={item.key ?? item.element_id} className="flex items-center gap-3 text-xs">
+            <span title={item.element_id} className="truncate text-zinc-600 dark:text-zinc-400 w-36 flex-shrink-0">{item.label ?? item.element_id}</span>
             <div className="flex-1 relative h-4 flex items-center">
               <div className={`absolute h-1.5 rounded-full ${S[catId].bar} opacity-20`} style={{ width: `${item.pct_looked}%` }} />
               <div className={`absolute h-1.5 rounded-full ${S[catId].bar}`} style={{ width: `${item.pct_clicked}%` }} />

@@ -56,6 +56,29 @@ function flushBatch() {
 setInterval(flushBatch, 1000);
 
 // ── Element resolution ───────────────────────────────────────────────────────
+
+// Nodes we inject ourselves. document.elementFromPoint() sits under the gaze
+// dot, so without this every sample would report our own overlay as the thing
+// the user was looking at.
+const OWN_NODE_IDS = new Set(['webgazerGazeDot', 'webgazerFaceOverlay', 'webgazerVideoFeed']);
+
+function isOwnNode(el: Element | null): boolean {
+  if (!el) return false;
+  const id = (el as HTMLElement).id ?? '';
+  return OWN_NODE_IDS.has(id) || id.startsWith('__lm_');
+}
+
+// Resolve the page element under a point, stepping past our own overlay rather
+// than reporting it. Hiding the dot for the hit-test is the only reliable way:
+// elementsFromPoint order is not guaranteed to skip it.
+function pageElementFromPoint(x: number, y: number): Element | null {
+  const stack = document.elementsFromPoint(x, y);
+  for (const el of stack) {
+    if (!isOwnNode(el)) return el;
+  }
+  return null;
+}
+
 function resolveElementId(el: Element | null): string {
   if (!el) return '';
   if (el.id) return `#${el.id}`;
@@ -64,6 +87,78 @@ function resolveElementId(el: Element | null): string {
   if (html.dataset?.id) return html.dataset.id;
   const cls = el.classList[0] ? `.${el.classList[0]}` : '';
   return `${el.tagName.toLowerCase()}${cls}`;
+}
+
+// A positionally unique key for the element.
+//
+// resolveElementId() alone collapses every unclassed <p> on a page into the
+// single bucket "p", so the dashboard reported one row of 26 fixations spread
+// across unrelated paragraphs. Walking up with nth-of-type keeps distinct
+// components distinct while staying stable across reloads.
+function resolveElementKey(el: Element | null): string {
+  if (!el) return '';
+  const parts: string[] = [];
+  let node: Element | null = el;
+  for (let i = 0; i < 4 && node && node !== document.body; i++) {
+    if (node.id) {
+      parts.unshift(`#${node.id}`);
+      break;
+    }
+    const tag = node.tagName.toLowerCase();
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      const sameTag = Array.from(parent.children).filter((c) => c.tagName === node!.tagName);
+      const idx = sameTag.indexOf(node);
+      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx + 1})` : tag);
+    } else {
+      parts.unshift(tag);
+    }
+    node = parent;
+  }
+  return parts.join('>');
+}
+
+// Everything the labelling pipeline needs to name this element. An <img> has no
+// textContent, so alt/aria/title/src are the only DOM-side signals that can name
+// it; the rect lets the backend match it against the page screenshot.
+function describeTarget(el: Element | null) {
+  if (!el) {
+    return {
+      element_id: '', element_key: '', element_xpath: '', element_tag: '',
+      element_text: '', element_alt: '', element_aria: '', element_title: '',
+      element_src: '', element_rect: null as null | { x: number; y: number; w: number; h: number },
+    };
+  }
+
+  const html = el as HTMLElement;
+  const img = el as HTMLImageElement;
+  let rect: { x: number; y: number; w: number; h: number } | null = null;
+  try {
+    const r = el.getBoundingClientRect();
+    // Document-space, so it lines up with the stitched screenshot directly.
+    rect = {
+      x: Math.round(r.left + window.scrollX),
+      y: Math.round(r.top + window.scrollY),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
+  } catch {
+    rect = null;
+  }
+
+  return {
+    element_id: resolveElementId(el),
+    element_key: resolveElementKey(el),
+    element_xpath: resolveXPath(el),
+    element_tag: el.tagName.toLowerCase(),
+    element_text: html.innerText?.trim().slice(0, 80) ?? '',
+    element_alt: (img.alt ?? '').trim().slice(0, 80),
+    element_aria: (el.getAttribute('aria-label') ?? '').trim().slice(0, 80),
+    element_title: (el.getAttribute('title') ?? '').trim().slice(0, 80),
+    // Basename only — full CDN URLs are long and carry no extra meaning.
+    element_src: (img.currentSrc || img.src || '').split('?')[0].split('/').pop()?.slice(0, 80) ?? '',
+    element_rect: rect,
+  };
 }
 
 function resolveXPath(el: Element | null): string {
@@ -149,10 +244,7 @@ document.addEventListener('click', (e) => {
       viewport_y: e.clientY,
       scroll_x: window.scrollX,
       scroll_y: window.scrollY,
-      element_id: resolveElementId(el),
-      element_xpath: resolveXPath(el),
-      element_tag: el.tagName.toLowerCase(),
-      element_text: el.textContent?.trim().slice(0, 40) ?? '',
+      ...describeTarget(el),
       is_interactive: INTERACTIVE_TAGS.has(el.tagName.toLowerCase()),
     },
   });
@@ -386,7 +478,8 @@ if (webgazer) {
     if (now - lastGazeTime < 100) return; // 10 fps throttle
     lastGazeTime = now;
 
-    const el = document.elementFromPoint(Math.round(anchorX), Math.round(anchorY));
+    // Step past our own gaze dot — it sits directly under this point.
+    const el = pageElementFromPoint(Math.round(anchorX), Math.round(anchorY));
     queueEvent({
       type: 'gaze',
       page_url: currentUrl,
@@ -395,10 +488,7 @@ if (webgazer) {
         y: Math.round(anchorY),
         scroll_x: window.scrollX,
         scroll_y: window.scrollY,
-        element_id: resolveElementId(el),
-        element_xpath: resolveXPath(el),
-        element_tag: el?.tagName.toLowerCase() ?? '',
-        element_text: (el as HTMLElement)?.innerText?.trim().slice(0, 40) ?? '',
+        ...describeTarget(el),
       },
     });
   });

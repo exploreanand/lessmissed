@@ -4,6 +4,7 @@ import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
+import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import HeatmapViewer from "./HeatmapViewer";
 import InsightCatalog from "./InsightCatalog";
@@ -45,14 +46,28 @@ export default async function PageDetailPage({ params }) {
 
   // Element-level data from fixations + clicks for this page's exact path
   const [fixationAgg, clickAgg, firstFixation] = await Promise.all([
+    // Group by screenshot region, falling back to the raw selector for
+    // fixations derived before the page was labelled. Grouping by region is
+    // what separates components that share one selector — on a commerce page a
+    // single "img.image-image" covers the hero, the promo strip and every
+    // category tile.
     Fixation.aggregate([
       { $match: { project_id: project._id, page_url: page.path } },
       {
         $group: {
-          _id: "$element_id",
+          // region → positional key → selector. The middle rung matters for
+          // sessions recorded before the page was labelled: element_id alone
+          // merges every unclassed <p> into one row.
+          _id: { $ifNull: ["$region_id", { $ifNull: ["$element_key", "$element_id"] }] },
           fixation_count: { $sum: 1 },
           total_dwell_ms: { $sum: "$duration_ms" },
           session_ids: { $addToSet: "$session_id" },
+          element_id: { $first: "$element_id" },
+          element_tag: { $first: "$element_tag" },
+          element_text: { $first: "$element_text" },
+          element_alt: { $first: "$element_alt" },
+          element_aria: { $first: "$element_aria" },
+          element_src: { $first: "$element_src" },
         },
       },
       { $sort: { fixation_count: -1 } },
@@ -82,27 +97,44 @@ export default async function PageDetailPage({ params }) {
     if (c._id) clickMap[c._id] = { click_count: c.click_count, click_sessions: c.session_ids.length };
   });
 
-  const elements = fixationAgg.map((f) => {
-    const elementId = f._id ?? "unknown";
-    const clicks = clickMap[elementId] ?? { click_count: 0, click_sessions: 0 };
-    const sessionsWithFixation = f.session_ids.length;
-    const sessionsWithClick = clicks.click_sessions;
-    return {
-      element_id: elementId,
-      fixation_count: f.fixation_count,
-      total_dwell_ms: f.total_dwell_ms,
-      avg_dwell_ms: Math.round(f.total_dwell_ms / f.fixation_count),
-      click_count: clicks.click_count,
-      sessions_with_fixation: sessionsWithFixation,
-      sessions_with_click: sessionsWithClick,
-      pct: totalSessions > 0 ? Math.round((sessionsWithFixation / totalSessions) * 100) : 0,
-    };
-  });
+  // Region labels come from the stored map; anything unlabelled falls back to
+  // the best description we can build from the DOM fields on the fixation.
+  const regionById = new Map((page.regions ?? []).map((r) => [r.region_id, r]));
+
+  const elements = fixationAgg
+    // Drop our own gaze-dot overlay: it is instrumentation, not the site.
+    .filter((f) => regionById.has(f._id) || !isInstrumentElement(f.element_id))
+    .map((f) => {
+      const elementId = f.element_id ?? f._id ?? "unknown";
+      const region = regionById.get(f._id);
+      const described = describeElement(f);
+      const clicks = clickMap[elementId] ?? { click_count: 0, click_sessions: 0 };
+      const sessionsWithFixation = f.session_ids.length;
+      const sessionsWithClick = clicks.click_sessions;
+      return {
+        // The $group id — region, positional key, or selector. Unique per row,
+        // unlike element_id, which many regions now deliberately share.
+        key: f._id,
+        element_id: elementId,
+        label: region?.label ?? described.label,
+        category: region?.category ?? null,
+        label_source: region?.source ?? described.source,
+        fixation_count: f.fixation_count,
+        total_dwell_ms: f.total_dwell_ms,
+        avg_dwell_ms: Math.round(f.total_dwell_ms / f.fixation_count),
+        click_count: clicks.click_count,
+        sessions_with_fixation: sessionsWithFixation,
+        sessions_with_click: sessionsWithClick,
+        pct: totalSessions > 0 ? Math.round((sessionsWithFixation / totalSessions) * 100) : 0,
+      };
+    });
 
   const lookedNotClicked = elements
     .filter((e) => e.sessions_with_fixation > 0 && e.sessions_with_click < e.sessions_with_fixation * 0.5)
     .map((e) => ({
+      key: e.key,
       element_id: e.element_id,
+      label: e.label,
       pct_looked: e.pct,
       pct_clicked: totalSessions > 0 ? Math.round((e.sessions_with_click / totalSessions) * 100) : 0,
     }))

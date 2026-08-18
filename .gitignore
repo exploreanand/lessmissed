@@ -26,6 +26,13 @@ lessmissed_extension/dist/
 .env.local
 .env*.local
 
+# Tesseract language models — downloaded on first OCR run, ~5MB each
+*.traineddata
+
+# Python virtualenv / caches for the self-hosted label service
+label-service/.venv/
+label-service/__pycache__/
+
 # OS
 .DS_Store
 Thumbs.db

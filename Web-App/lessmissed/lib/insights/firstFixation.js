@@ -1,4 +1,5 @@
 import Fixation from "@/lib/models/Fixation";
+import { describeElement } from "@/lib/insights/describeElement";
 import Session from "@/lib/models/Session";
 
 // INS-G04: First Fixation Point — the first 200ms+ fixation per session on a page,
@@ -74,6 +75,12 @@ export async function computeFirstFixation(project, page) {
       $group: {
         _id: "$session_id",
         element_id:      { $first: "$element_id" },
+        region_id:       { $first: "$region_id" },
+        element_tag:     { $first: "$element_tag" },
+        element_text:    { $first: "$element_text" },
+        element_alt:     { $first: "$element_alt" },
+        element_aria:    { $first: "$element_aria" },
+        element_src:     { $first: "$element_src" },
         center_x:        { $first: "$center_x" },
         center_y:        { $first: "$center_y" },
         duration_ms:     { $first: "$duration_ms" },
@@ -129,13 +136,24 @@ export async function computeFirstFixation(project, page) {
     pct: 0,
   }));
 
+  const regionById = new Map((page.regions ?? []).map((r) => [r.region_id, r]));
+
   const elementCounts = {};
   const times = [];
   const markers = [];
   let belowFold = 0;
 
+  // Count first looks by human label rather than by selector, so "the hero
+  // banner" and "a category tile" don't merge just because the DOM calls both
+  // img.image-image.
+  const labelFor = (f) => {
+    const region = regionById.get(f.region_id);
+    if (region?.label) return region.label;
+    return describeElement(f).label;
+  };
+
   for (const f of firsts) {
-    const elementId = f.element_id ?? "unknown";
+    const elementId = labelFor(f);
     elementCounts[elementId] = (elementCounts[elementId] ?? 0) + 1;
 
     const entry = enteredAt[f._id];
@@ -158,7 +176,8 @@ export async function computeFirstFixation(project, page) {
       session_id: f._id,
       x: f.center_x,
       y: f.center_y,
-      element_id: elementId,
+      element_id: f.element_id ?? "unknown",
+      label: elementId,
       duration_ms: f.duration_ms,
       time_to_first_ms: validTime,
       ...(canOverlay
@@ -193,9 +212,12 @@ export async function computeFirstFixation(project, page) {
         }
       : null;
 
+  // Keyed by human label (see labelFor); element_id is kept as an alias so
+  // older consumers of this shape keep working.
   const topElements = Object.entries(elementCounts)
-    .map(([element_id, session_count]) => ({
-      element_id,
+    .map(([label, session_count]) => ({
+      element_id: label,
+      label,
       session_count,
       pct: pctOf(session_count),
     }))

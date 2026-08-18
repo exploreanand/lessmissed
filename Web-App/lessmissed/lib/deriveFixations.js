@@ -1,5 +1,8 @@
-import Event from "@/lib/models/Event";
-import Fixation from "@/lib/models/Fixation";
+// Relative (with extension) so the backfill script can import this module
+// under plain Node, outside the Next bundler's "@/" alias.
+import Event from "./models/Event.js";
+import Fixation from "./models/Fixation.js";
+import { isOverlayElement } from "./insights/describeElement.js";
 
 const DISPERSION_THRESHOLD = 100; // px — max x-spread + y-spread to count as one fixation
 const MIN_DURATION_MS = 150;      // discard fixation candidates shorter than this
@@ -20,6 +23,17 @@ function mode(arr) {
   return best;
 }
 
+// Pick the first non-empty value for a key across the samples that belong to
+// the modal element — a single sample can miss alt/aria even when its siblings
+// carry it, so we don't rely on the one representative sample alone.
+function firstOf(samples, key) {
+  for (const s of samples) {
+    const v = s.data?.[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
 function buildFixation(samples, sessionId, projectId, pageUrl) {
   const xs = samples.map((s) => s.data.x + (s.data.scroll_x ?? 0));
   const ys = samples.map((s) => s.data.y + (s.data.scroll_y ?? 0));
@@ -27,12 +41,32 @@ function buildFixation(samples, sessionId, projectId, pageUrl) {
   const elementId = mode(elementIds);
   const xpathSample = samples.find((s) => s.data.element_id === elementId);
 
+  // Semantics come only from samples on the modal element, so a stray sample
+  // that drifted onto a neighbour can't contribute someone else's label.
+  const own = samples.filter((s) => s.data.element_id === elementId);
+  const semanticSamples = own.length ? own : samples;
+  const rect = semanticSamples.find((s) => s.data?.element_rect)?.data.element_rect ?? null;
+
   return {
     session_id: sessionId,
     project_id: projectId,
     page_url: pageUrl,
     element_id: elementId ?? null,
+    element_key: firstOf(semanticSamples, "element_key"),
     element_xpath: xpathSample?.data.element_xpath ?? null,
+    element_tag: firstOf(semanticSamples, "element_tag"),
+    element_text: firstOf(semanticSamples, "element_text"),
+    element_alt: firstOf(semanticSamples, "element_alt"),
+    element_aria: firstOf(semanticSamples, "element_aria"),
+    element_src: firstOf(semanticSamples, "element_src"),
+    element_rect: rect
+      ? {
+          x: rect.x ?? null,
+          y: rect.y ?? null,
+          w: rect.w ?? null,
+          h: rect.h ?? null,
+        }
+      : undefined,
     center_x: Math.round(avg(xs)),
     center_y: Math.round(avg(ys)),
     duration_ms: new Date(samples.at(-1).timestamp) - new Date(samples[0].timestamp),
@@ -46,16 +80,25 @@ export async function deriveFixations(sessionId, projectId) {
   // Fetch all gaze events for this session in chronological order
   const gazeEvents = await Event.find(
     { session_id: sessionId, type: "gaze" },
-    { "data.x": 1, "data.y": 1, "data.scroll_x": 1, "data.scroll_y": 1, "data.element_id": 1, "data.element_xpath": 1, timestamp: 1, page_url: 1 }
+    {
+      "data.x": 1, "data.y": 1, "data.scroll_x": 1, "data.scroll_y": 1,
+      "data.element_id": 1, "data.element_key": 1, "data.element_xpath": 1, "data.element_tag": 1,
+      "data.element_text": 1, "data.element_alt": 1, "data.element_aria": 1,
+      "data.element_src": 1, "data.element_rect": 1,
+      timestamp: 1, page_url: 1,
+    }
   )
     .sort({ timestamp: 1 })
     .lean();
 
   if (!gazeEvents.length) return 0;
 
-  // Group by page_url so fixations don't span page navigations
+  // Group by page_url so fixations don't span page navigations. Samples that
+  // landed on our own gaze-dot overlay are dropped here: they measure the
+  // instrument, not the page, and would otherwise rank as a real element.
   const byPage = {};
   for (const ev of gazeEvents) {
+    if (isOverlayElement(ev.data?.element_id)) continue;
     (byPage[ev.page_url] ??= []).push(ev);
   }
 
