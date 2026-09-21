@@ -20,6 +20,7 @@ import {
   buildRegionsFromClusters,
   resolveRegion,
 } from "../lib/insights/regionMap.js";
+import { pageMatchFilter } from "../lib/pathTemplate.js";
 import { ocrScreenshot } from "../lib/insights/ocrPage.js";
 import { isLabelServiceUp, labelRegionCrop } from "../lib/insights/vlmLabel.js";
 
@@ -63,7 +64,7 @@ async function main() {
     for (const page of project.pages ?? []) {
       const fixations = await Fixation.find({
         project_id: project._id,
-        page_url: page.path,
+        ...pageMatchFilter(page),
       }).lean();
 
       if (!fixations.length) {

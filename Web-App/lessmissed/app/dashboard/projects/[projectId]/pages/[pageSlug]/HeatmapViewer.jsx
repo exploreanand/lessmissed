@@ -387,9 +387,10 @@ export default function HeatmapViewer({ projectId, pageSlug }) {
         {noScreenshot && (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm">
             <div className="text-center px-6">
-              <p className="text-sm font-semibold text-white">No page screenshot yet</p>
+              <p className="text-sm font-semibold text-white">No page preview yet</p>
               <p className="text-xs text-zinc-300 mt-1">
-                Use the LessMissed extension → <strong>Capture page</strong> while on this URL
+                Add this page under <strong>Pages → Target pages</strong> and a preview is
+                prepared automatically.
               </p>
             </div>
           </div>

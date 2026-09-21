@@ -4,6 +4,7 @@ import Event from "@/lib/models/Event";
 import Session from "@/lib/models/Session";
 import { getSessionUser } from "@/lib/auth/session";
 import { getOwnedProject } from "@/lib/auth/ownership";
+import { pageMatchFilter } from "@/lib/pathTemplate";
 
 // GET /api/projects/:id/pages/:pageSlug/elements
 // Returns element-level attention: fixation_count, dwell_ms, click_count,
@@ -19,15 +20,19 @@ export async function GET(request, { params }) {
   const page = project.pages.find((p) => p.slug === pageSlug);
   if (!page) return NextResponse.json({ error: "Page not found" }, { status: 404 });
 
+  const pageFilter = pageMatchFilter(page);
+
+  // Sessions are scoped by the visit's template — the key the visits endpoint
+  // writes — not by the raw path, which never matched a wildcard page.
   const totalSessions = await Session.countDocuments({
     project_id: id,
     status: "completed",
-    "pages_visited.path": page.path,
+    "pages_visited.template": page.path,
   });
 
   // Aggregate fixations by element_id
   const fixationAgg = await Fixation.aggregate([
-    { $match: { project_id: project._id, page_url: page.path } },
+    { $match: { project_id: project._id, ...pageFilter } },
     {
       $group: {
         _id: "$element_id",
@@ -44,7 +49,7 @@ export async function GET(request, { params }) {
     {
       $match: {
         "metadata.project_id": project._id,
-        page_url: page.path,
+        ...pageFilter,
         type: "click",
       },
     },
@@ -59,23 +64,37 @@ export async function GET(request, { params }) {
 
   const clickMap = {};
   clickAgg.forEach((c) => {
-    if (c._id) clickMap[c._id] = { click_count: c.click_count, click_sessions: c.session_ids.length };
+    // Keep the session ids, not just how many there were: both rates below are
+    // defined over sessions that fixated AND clicked, which needs the
+    // intersection. Comparing raw counts lets a element clicked by sessions
+    // that never fixated it drive looked_not_clicked_rate negative.
+    if (c._id) clickMap[c._id] = { click_count: c.click_count, click_session_ids: c.session_ids };
   });
 
   const elements = fixationAgg.map((f) => {
     const elementId = f._id ?? "unknown";
-    const clicks = clickMap[elementId] ?? { click_count: 0, click_sessions: 0 };
-    const sessions_with_fixation = f.session_ids.length;
-    const sessions_with_click = clicks.click_sessions;
+    const clicks = clickMap[elementId] ?? { click_count: 0, click_session_ids: [] };
+    const fixationSessions = new Set(f.session_ids);
+    const sessions_with_fixation = fixationSessions.size;
+    const sessions_with_click = clicks.click_session_ids.length;
+    // S_F ∩ S_C — sessions that both looked at the element and clicked it.
+    const sessions_fixated_and_clicked =
+      clicks.click_session_ids.filter((id) => fixationSessions.has(id)).length;
 
+    // LBNC(e) = |S_F \ S_C| / |S_F| — the share of sessions that looked and
+    // did not act. Bounded to [0, 100] by construction.
     const looked_not_clicked_rate =
       sessions_with_fixation > 0
-        ? Math.round(((sessions_with_fixation - sessions_with_click) / sessions_with_fixation) * 100)
+        ? Math.round(
+            ((sessions_with_fixation - sessions_fixated_and_clicked) / sessions_with_fixation) * 100
+          )
         : 0;
 
+    // A2A(e) = |S_F| / |S_F ∩ S_C| — looks per action, so that
+    // A2A = 1 / (1 - LBNC) holds exactly.
     const attention_to_action_ratio =
-      sessions_with_click > 0
-        ? (sessions_with_fixation / sessions_with_click).toFixed(1)
+      sessions_fixated_and_clicked > 0
+        ? (sessions_with_fixation / sessions_fixated_and_clicked).toFixed(1)
         : sessions_with_fixation > 0
         ? "∞"
         : "0";
@@ -88,6 +107,7 @@ export async function GET(request, { params }) {
       click_count: clicks.click_count,
       sessions_with_fixation,
       sessions_with_click,
+      sessions_fixated_and_clicked,
       looked_not_clicked_rate,
       attention_to_action_ratio,
       // INS-G03: element was never seen

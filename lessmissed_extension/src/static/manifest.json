@@ -19,22 +19,34 @@
   },
   "permissions": [
     "tabs",
-    "scripting",
     "storage",
     "activeTab",
-    "tabCapture"
+    "alarms"
   ],
-  "host_permissions": ["*://*/*"],
+  "host_permissions": [
+    "*://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["webgazer.js", "contentScript.js"]
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "webgazer.js",
+        "contentScript.js"
+      ]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["webgazer.js", "icon.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "webgazer.js",
+        "icon.png",
+        "models/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

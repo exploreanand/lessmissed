@@ -4,6 +4,22 @@ import Project from "@/lib/models/Project";
 import { getSessionUser } from "@/lib/auth/session";
 import HealthBadge from "../../components/dashboard/HealthBadge";
 import DeleteProjectButton from "../../components/dashboard/DeleteProjectButton";
+import { loadMetricsForPages } from "@/lib/insights/pageMetrics";
+
+/**
+ * Project health: the mean of its target pages' health, or null.
+ *
+ * Project.health_score is a stored field that nothing has ever written, so
+ * every project card showed a red 0. Pages whose health is unknown are left out
+ * rather than averaged in as 0.
+ */
+async function projectHealth(project) {
+  const targets = (project.pages ?? []).filter((p) => p.target);
+  if (!targets.length) return null;
+  const metrics = await loadMetricsForPages(project, targets);
+  const known = [...metrics.values()].map((m) => m.health).filter((h) => h != null);
+  return known.length ? Math.round(known.reduce((a, b) => a + b, 0) / known.length) : null;
+}
 
 function timeAgo(date) {
   if (!date) return "never";
@@ -19,6 +35,7 @@ export default async function ProjectsPage() {
   const user = await getSessionUser();
   await connectDB();
   const projects = await Project.find({ client_id: user.userId }).sort({ created_at: -1 }).lean();
+  const health = await Promise.all(projects.map(projectHealth));
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto">
@@ -43,39 +60,57 @@ export default async function ProjectsPage() {
 
       {/* Project grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {projects.map((project) => {
+        {projects.map((project, index) => {
           const id = project._id.toString();
+          const score = health[index];
+          const targetCount = project.pages.filter((p) => p.target).length;
           const lastSession = project.pages
             .map((p) => p.last_session_at)
             .filter(Boolean)
             .sort()
             .pop();
           return (
+            // The whole card opens the project, not just the small "View" text.
+            // Stretched link on the name; Delete sits above it on z-10 so it
+            // stays its own control rather than a button nested inside a link.
             <div
               key={id}
-              className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 flex flex-col gap-4 hover:border-violet-300 dark:hover:border-violet-700 transition-colors"
+              className="group relative rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 flex flex-col gap-4 hover:border-violet-300 dark:hover:border-violet-700 focus-within:border-violet-400 transition-colors"
             >
               {/* Project identity */}
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-semibold text-zinc-900 dark:text-zinc-50">{project.name}</p>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">{project.domain}</p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Link
+                    href={`/dashboard/projects/${id}`}
+                    className="font-semibold text-zinc-900 dark:text-zinc-50 after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus:outline-none"
+                  >
+                    {project.name}
+                  </Link>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 truncate">{project.domain}</p>
                 </div>
-                <HealthBadge score={project.health_score} />
               </div>
 
               {/* Stats */}
               <div className="grid grid-cols-3 gap-3">
                 {[
                   { label: "Sessions", value: (project.total_sessions ?? 0).toLocaleString() },
-                  { label: "Pages", value: project.pages.length },
-                  { label: "Health", value: project.health_score ?? 0 },
+                  { label: "Target pages", value: targetCount },
                 ].map((s) => (
                   <div key={s.label} className="rounded-xl bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
                     <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{s.value}</p>
                     <p className="text-[10px] text-zinc-400 uppercase tracking-wide">{s.label}</p>
                   </div>
                 ))}
+                <div className="rounded-xl bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
+                  <div className="flex h-7 items-center justify-center">
+                    {score == null ? (
+                      <span className="text-lg font-bold text-zinc-400">—</span>
+                    ) : (
+                      <HealthBadge score={score} />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-zinc-400 uppercase tracking-wide">Health</p>
+                </div>
               </div>
 
               {/* Footer */}
@@ -84,13 +119,15 @@ export default async function ProjectsPage() {
                   Last session {timeAgo(lastSession)}
                 </p>
                 <div className="flex items-center gap-3">
-                  <DeleteProjectButton projectId={id} projectName={project.name} />
-                  <Link
-                    href={`/dashboard/projects/${id}`}
-                    className="text-xs font-semibold text-violet-600 dark:text-violet-400 hover:underline"
+                  <div className="relative z-10">
+                    <DeleteProjectButton projectId={id} projectName={project.name} />
+                  </div>
+                  <span
+                    aria-hidden="true"
+                    className="text-xs font-semibold text-violet-600 dark:text-violet-400 group-hover:underline"
                   >
                     View →
-                  </Link>
+                  </span>
                 </div>
               </div>
             </div>

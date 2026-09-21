@@ -1,0 +1,21 @@
+{
+  "name": "lessmissed-capture-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Renders and versions screenshots of configured target pages. Leases work from a MongoDB job queue.",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=../Web-App/lessmissed/.env.local --env-file-if-exists=.env src/worker.js",
+    "doctor": "node --env-file-if-exists=../Web-App/lessmissed/.env.local --env-file-if-exists=.env src/doctor.js",
+    "check": "node --env-file-if-exists=../Web-App/lessmissed/.env.local --env-file-if-exists=.env src/checker.js",
+    "capture": "node src/capture-once.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1037.0",
+    "mongoose": "^9.4.1",
+    "playwright": "^1.63.0",
+    "sharp": "^0.34.5"
+  }
+}

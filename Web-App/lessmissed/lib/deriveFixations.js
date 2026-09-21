@@ -3,9 +3,16 @@
 import Event from "./models/Event.js";
 import Fixation from "./models/Fixation.js";
 import { isOverlayElement } from "./insights/describeElement.js";
+import { normalizePath } from "./pathTemplate.js";
 
 const DISPERSION_THRESHOLD = 100; // px — max x-spread + y-spread to count as one fixation
 const MIN_DURATION_MS = 150;      // discard fixation candidates shorter than this
+// Gaze streams at 10fps, so consecutive samples are ~100ms apart. A larger gap
+// means the samples are not one continuous look — the consumer left the page and
+// came back. Site-wide sessions revisit pages constantly (product → cart →
+// product), and without this guard those two visits merge into one fixation
+// spanning the whole detour.
+const MAX_SAMPLE_GAP_MS = 2000;
 
 function avg(arr) {
   return arr.reduce((s, v) => s + v, 0) / arr.length;
@@ -51,6 +58,10 @@ function buildFixation(samples, sessionId, projectId, pageUrl) {
     session_id: sessionId,
     project_id: projectId,
     page_url: pageUrl,
+    // Stamped per fixation rather than used as the grouping key: grouping stays
+    // on the raw URL so a fixation can never span a navigation, while queries
+    // still aggregate every product page onto one "/products/:id" row.
+    page_template: samples[0]?.page_template || normalizePath(pageUrl),
     element_id: elementId ?? null,
     element_key: firstOf(semanticSamples, "element_key"),
     element_xpath: xpathSample?.data.element_xpath ?? null,
@@ -85,7 +96,7 @@ export async function deriveFixations(sessionId, projectId) {
       "data.element_id": 1, "data.element_key": 1, "data.element_xpath": 1, "data.element_tag": 1,
       "data.element_text": 1, "data.element_alt": 1, "data.element_aria": 1,
       "data.element_src": 1, "data.element_rect": 1,
-      timestamp: 1, page_url: 1,
+      timestamp: 1, page_url: 1, page_template: 1,
     }
   )
     .sort({ timestamp: 1 })
@@ -115,8 +126,10 @@ export async function deriveFixations(sessionId, projectId) {
       const ys = candidate.map((s) => s.data.y + (s.data.scroll_y ?? 0));
       const dispersion =
         Math.max(...xs) - Math.min(...xs) + (Math.max(...ys) - Math.min(...ys));
+      const gapMs =
+        new Date(samples[i].timestamp) - new Date(window.at(-1).timestamp);
 
-      if (dispersion <= DISPERSION_THRESHOLD) {
+      if (dispersion <= DISPERSION_THRESHOLD && gapMs <= MAX_SAMPLE_GAP_MS) {
         window = candidate;
       } else {
         const durationMs =

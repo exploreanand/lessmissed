@@ -36,8 +36,25 @@ interface RawEvent {
 const eventQueue: RawEvent[] = [];
 const BATCH_MAX = 50;
 
+// Dropping an event because there is no session id is a bug, not a normal
+// outcome: tracking is running, the camera is on, the consumer is being
+// recorded — and none of it is being kept. It used to happen in silence, which
+// is how a whole site's worth of gaze went missing with every page still
+// looking like it was working. Say so, once, loudly enough to find.
+let droppedWithoutSession = 0;
+
 function queueEvent(partial: Omit<RawEvent, 'timestamp' | 'session_id'>) {
-  if (!currentSessionId) return;
+  if (!currentSessionId) {
+    if (isTracking && droppedWithoutSession++ === 0) {
+      console.error(
+        '[LessMissed] Tracking is running but no session id was supplied — ' +
+          'every event on this page is being discarded. The SESSION_HELLO reply ' +
+          'had no session_id.'
+      );
+      reportResumeFailure('tracking_without_session');
+    }
+    return;
+  }
   eventQueue.push({
     timestamp: new Date().toISOString(),
     session_id: currentSessionId,
@@ -46,10 +63,41 @@ function queueEvent(partial: Omit<RawEvent, 'timestamp' | 'session_id'>) {
   if (eventQueue.length >= BATCH_MAX) flushBatch();
 }
 
+// A ceiling on the buffer. Without it a re-queue bug grows without bound —
+// which is exactly what happened once — and a genuinely offline tab would eat
+// memory until the tab died. Oldest samples go first: recent gaze is the part
+// still worth having.
+const QUEUE_MAX = 5000;
+
 function flushBatch() {
   if (!eventQueue.length || !currentSessionId) return;
   const batch = eventQueue.splice(0);
-  chrome.runtime.sendMessage({ action: 'EVENTS_BATCH', events: batch });
+
+  chrome.runtime.sendMessage({ action: 'EVENTS_BATCH', events: batch }, (response) => {
+    // Re-queue only on a real delivery failure. The worker acknowledges with
+    // {ok:true}; a missing acknowledgement means it never received this.
+    // Checking lastError alone is not enough — a handler that returns without
+    // calling sendResponse also sets it, and treating that as failure replays
+    // every successful batch forever.
+    if (chrome.runtime.lastError || !response?.ok) {
+      eventQueue.unshift(...batch);
+      if (eventQueue.length > QUEUE_MAX) {
+        eventQueue.splice(0, eventQueue.length - QUEUE_MAX);
+      }
+    }
+  });
+}
+
+/** Tell the worker a page could not resume, so it is visible off-device. */
+function reportResumeFailure(reason: string) {
+  try {
+    chrome.runtime.sendMessage(
+      { action: 'RESUME_FAILED', reason, url: location.href },
+      () => void chrome.runtime.lastError
+    );
+  } catch {
+    // The worker is gone; the console message above is all we have.
+  }
 }
 
 // Flush on a 1-second heartbeat regardless of batch size
@@ -257,28 +305,165 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) flushBatch(); // flush immediately before browser suspends the tab
 });
 
+// ── Page unload ──────────────────────────────────────────────────────────────
+// The 1-second batch heartbeat would otherwise drop up to a second of gaze at
+// every navigation — and with site-wide tracking there is now a navigation every
+// few seconds. pagehide is the last point at which a message can still be posted.
+window.addEventListener('pagehide', () => {
+  if (!isTracking) return;
+  queueEvent({ type: 'visibility', page_url: currentUrl, data: { visible: false, unloading: true } });
+  flushBatch();
+  chrome.runtime.sendMessage({
+    action: 'PAGE_LEAVE',
+    path: currentUrl,
+    at: new Date().toISOString(),
+  });
+});
+
 // ── SPA route detection ──────────────────────────────────────────────────────
-function onRouteChange() {
-  const newUrl = location.pathname + location.search;
+//
+// A client-side route change is not a page load: this script is never rebuilt,
+// so unless something tells it otherwise `currentUrl` stays at whatever page the
+// consumer entered on and every later event is filed under the wrong page.
+//
+// This used to patch history.pushState. That can never work. Content scripts run
+// in an **isolated world** — they share the DOM but not the JS context — so the
+// patch lands on this world's binding of History.prototype.pushState, while the
+// page calls its own. On a Next.js site every in-app link is exactly that call,
+// so the handler never fired once: there is not a single page_change event in
+// the entire database. Back/forward appeared to work only because `popstate` is
+// a DOM event, and those do cross into this world.
+//
+// So: don't try to observe the page's own calls. Two sources that actually work
+// — the worker, which sees every navigation through chrome.tabs.onUpdated and is
+// already right about them, and a cheap poll for anything it misses.
+function onRouteChange(nextUrl?: string) {
+  const newUrl = nextUrl ?? location.pathname + location.search;
   if (newUrl === currentUrl) return;
+
+  // Flush before moving. Anything already queued happened on the old page, and
+  // re-labelling it here would file it under the page they just arrived at.
   queueEvent({ type: 'page_change', page_url: currentUrl, data: { from: currentUrl, to: newUrl } });
+  flushBatch();
+
   currentUrl = newUrl;
   prevScrollY = window.scrollY || 0;
+  resetSmoothingState();
 }
 
-const _pushState = history.pushState.bind(history);
-history.pushState = (...args: Parameters<typeof history.pushState>) => {
-  _pushState(...args);
-  onRouteChange();
-};
+window.addEventListener('popstate', () => onRouteChange());
 
-const _replaceState = history.replaceState.bind(history);
-history.replaceState = (...args: Parameters<typeof history.replaceState>) => {
-  _replaceState(...args);
-  onRouteChange();
-};
+// The worker tells us where we are; it is the authority on navigation and needs
+// no cooperation from the page.
+chrome.runtime.onMessage.addListener((request) => {
+  if (request?.action === 'URL_CHANGED' && typeof request.path === 'string') {
+    onRouteChange(request.path);
+  }
+  return false;
+});
 
-window.addEventListener('popstate', onRouteChange);
+// Safety net, on the flush heartbeat that already runs: correctness should not
+// depend on a message arriving.
+setInterval(() => onRouteChange(), 1000);
+
+// ── Starting tracking ────────────────────────────────────────────────────────
+
+// The one place tracking begins, reached two ways: the popup's explicit START,
+// and the SESSION_HELLO handshake at the bottom of this file that resumes an
+// in-flight session after the consumer navigates to another page.
+//
+// Camera permission and WebGazer's calibration model are both per-origin —
+// permission is remembered by the browser, and the model persists to
+// localStorage via saveDataAcrossSessions — so resuming within one site costs a
+// model reload but no prompt and no re-calibration. Crossing to a different
+// subdomain does lose the calibration.
+// ── Serve WebGazer's face models from the extension, not the network ─────────
+//
+// webgazer.begin() loads BlazeFace, FaceMesh and Iris weights from tfhub.dev,
+// which now 302s to a signed Kaggle storage URL that expires in three hours.
+// Every navigation is a fresh JS context, so that is ~6 MB re-downloaded on
+// *every page load* — and it happens from the page's origin, because MV3
+// content scripts do not inherit the extension's host permissions. When it
+// fails, begin() rejects with "TypeError: Failed to fetch" and that page
+// silently collects nothing for the rest of the session.
+//
+// The models are vendored in the extension, so map those requests onto
+// chrome-extension:// URLs and take the network out of the startup path.
+const TFHUB_MODEL_MAP: Array<[RegExp, string]> = [
+  [/tfhub\.dev\/tensorflow\/tfjs-model\/blazeface\//i, 'models/blazeface/'],
+  [/tfhub\.dev\/mediapipe\/tfjs-model\/facemesh\//i, 'models/facemesh/'],
+  [/tfhub\.dev\/mediapipe\/tfjs-model\/iris\//i, 'models/iris/'],
+];
+
+function localModelUrl(url: string): string | null {
+  for (const [pattern, dir] of TFHUB_MODEL_MAP) {
+    if (!pattern.test(url)) continue;
+    // tfjs asks for ".../model.json?tfjs-format=file" and then the weight
+    // shard named in the manifest. Only the basename matters here.
+    const file = url.split('?')[0].split('/').pop();
+    if (!file) return null;
+    return chrome.runtime.getURL(dir + file);
+  }
+  return null;
+}
+
+let modelFetchPatched = false;
+
+function patchModelFetch() {
+  if (modelFetchPatched) return;
+  modelFetchPatched = true;
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = ((input: any, init?: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    const local = typeof url === 'string' ? localModelUrl(url) : null;
+    return local ? nativeFetch(local, init) : nativeFetch(input, init);
+  }) as typeof window.fetch;
+}
+
+function beginTracking(sessionId: string | null): Promise<boolean> {
+  if (isTracking) return Promise.resolve(true);
+  if (!webgazer) return Promise.resolve(false);
+
+  currentSessionId = sessionId;
+  currentUrl = location.pathname + location.search;
+  prevScrollY = window.scrollY;
+
+  patchModelFetch();
+
+  return beginWithRetry()
+    .then(() => {
+      webgazer.params.applyKalmanFilter = true;
+      webgazer.params.saveDataAcrossSessions = true;
+      webgazer.showPredictionPoints(isDotVisible);
+      webgazer.showVideoPreview(false);
+      webgazer.showFaceOverlay(false);
+      webgazer.showFaceFeedbackBox(false);
+      isTracking = true;
+      resetSmoothingState();
+      return true;
+    })
+    .catch((err: unknown) => {
+      console.warn('[LessMissed] WebGazer failed to start:', err);
+      currentSessionId = null;
+      return false;
+    });
+}
+
+/**
+ * Start WebGazer, retrying a transient failure.
+ *
+ * With the models served locally this should not be needed — but a camera that
+ * is briefly still held by the previous page is a real race, and losing a whole
+ * page of a consumer's journey to it is too expensive to accept.
+ */
+function beginWithRetry(attempt = 0): Promise<void> {
+  return webgazer.begin().catch((err: unknown) => {
+    if (attempt >= 2) throw err;
+    return new Promise<void>((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+      .then(() => beginWithRetry(attempt + 1));
+  });
+}
 
 // ── Calibration ──────────────────────────────────────────────────────────────
 let calibrationSendResponse: ((response: any) => void) | null = null;
@@ -343,29 +528,6 @@ function startCalibration(sendResponse: (response: any) => void) {
 // ── Message listener ─────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
-  if (request.action === 'GET_PAGE_DIMS') {
-    sendResponse({
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      documentHeight: Math.max(
-        document.body.scrollHeight,
-        document.documentElement.scrollHeight,
-        document.body.offsetHeight,
-        document.documentElement.offsetHeight,
-        window.innerHeight
-      ),
-      scrollY: window.scrollY,
-      pageUrl: window.location.pathname,
-    });
-    return false;
-  }
-
-  if (request.action === 'SCROLL_TO') {
-    window.scrollTo({ top: request.y ?? 0, behavior: 'instant' as ScrollBehavior });
-    setTimeout(() => sendResponse({ ok: true, scrollY: window.scrollY }), 80);
-    return true;
-  }
-
   if (request.action === 'STATUS') {
     sendResponse({ status: isTracking ? 'started' : 'stopped', dotVisible: isDotVisible, session_id: currentSessionId });
     return false;
@@ -378,25 +540,13 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     return false;
   }
 
-  if (request.action === 'START' && !isTracking) {
-    if (!webgazer) {
-      sendResponse({ status: 'error', error: 'WebGazer not found' });
-      return false;
-    }
-    currentSessionId = request.session_id ?? null;
-    currentUrl = location.pathname + location.search;
-    prevScrollY = window.scrollY;
-
-    webgazer.begin().then(() => {
-      webgazer.params.applyKalmanFilter = true;
-      webgazer.params.saveDataAcrossSessions = true;
-      webgazer.showPredictionPoints(isDotVisible);
-      webgazer.showVideoPreview(false);
-      webgazer.showFaceOverlay(false);
-      webgazer.showFaceFeedbackBox(false);
-      isTracking = true;
-      resetSmoothingState();
-      sendResponse({ status: 'started', session_id: currentSessionId });
+  if (request.action === 'START') {
+    beginTracking(request.session_id ?? null).then((ok) => {
+      sendResponse(
+        ok
+          ? { status: 'started', session_id: currentSessionId }
+          : { status: 'error', error: 'WebGazer not found' }
+      );
     });
     return true;
   }
@@ -415,38 +565,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.action === 'CALIBRATE') {
     startCalibration(sendResponse);
     return true;
-  }
-
-  if (request.action === 'HIDE_FIXED_ELEMENTS') {
-    const styleEl = document.createElement('style');
-    styleEl.id = '__lm_hide_fixed';
-    styleEl.textContent = '[data-lm-hide]{visibility:hidden!important}';
-    document.head.appendChild(styleEl);
-
-    let count = 0;
-    let headerHeight = 0;
-    document.querySelectorAll<HTMLElement>('*').forEach(el => {
-      const pos = window.getComputedStyle(el).position;
-      if (pos === 'fixed' || pos === 'sticky') {
-        const rect = el.getBoundingClientRect();
-        if (rect.top <= 5 && rect.bottom > headerHeight) {
-          headerHeight = rect.bottom;
-        }
-        el.dataset.lmHide = '1';
-        count++;
-      }
-    });
-    sendResponse({ ok: true, count, headerHeight: Math.round(headerHeight) });
-    return false;
-  }
-
-  if (request.action === 'SHOW_FIXED_ELEMENTS') {
-    document.querySelectorAll<HTMLElement>('[data-lm-hide]').forEach(el => {
-      delete el.dataset.lmHide;
-    });
-    document.getElementById('__lm_hide_fixed')?.remove();
-    sendResponse({ ok: true });
-    return false;
   }
 
   return false;
@@ -495,3 +613,49 @@ if (webgazer) {
 } else {
   console.warn('[LessMissed] WebGazer not found on this page');
 }
+
+// ── Resume an in-flight session ──────────────────────────────────────────────
+//
+// This is what makes site-wide tracking work. A full page load destroys this
+// script and builds a fresh one with isTracking = false, so a session started on
+// the home page would silently die the moment the consumer clicked a link. The
+// background worker is the only thing that outlives the navigation, so we ask it
+// on every load whether a session is running for this tab and this site.
+//
+// The worker may be asleep, or starting, or mid-reload when this fires, and the
+// message is simply lost — so a single attempt is not enough. Giving up on the
+// first failure silently costs that page its entire session, which is exactly
+// how site-wide tracking came to collect nothing beyond the page the consumer
+// started on.
+const HELLO_ATTEMPTS = 5;
+const HELLO_BACKOFF_MS = [0, 250, 750, 2000, 4000];
+
+function sayHello(attempt = 0): void {
+  chrome.runtime.sendMessage({ action: 'SESSION_HELLO', url: location.href }, (response) => {
+    if (chrome.runtime.lastError || response == null) {
+      if (attempt + 1 < HELLO_ATTEMPTS) {
+        setTimeout(() => sayHello(attempt + 1), HELLO_BACKOFF_MS[attempt + 1]);
+      } else {
+        console.warn('[LessMissed] no answer from the worker; this page is not being tracked');
+      }
+      return;
+    }
+
+    // A definite "no" — not this tab, not this site, or no session running.
+    if (!response.tracking) return;
+
+    if (!response.session_id) {
+      // Tracking without an id would start the camera and throw every sample
+      // away. Refuse rather than pretend.
+      console.error('[LessMissed] worker said tracking but sent no session_id — not starting');
+      reportResumeFailure('hello_without_session_id');
+      return;
+    }
+
+    void beginTracking(response.session_id).then((ok) => {
+      if (!ok) reportResumeFailure('webgazer_begin_failed');
+    });
+  });
+}
+
+sayHello();

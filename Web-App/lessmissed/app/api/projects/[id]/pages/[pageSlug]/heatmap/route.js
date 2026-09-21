@@ -4,6 +4,7 @@ import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
 import { getSessionUser } from "@/lib/auth/session";
 import { getOwnedProject } from "@/lib/auth/ownership";
+import { pageMatchFilter } from "@/lib/pathTemplate";
 
 // Kills the Next.js cache so your heatmap always shows fresh data!
 export const dynamic = "force-dynamic";
@@ -28,12 +29,16 @@ export async function GET(request, { params }) {
   if (searchParams.get("date_from")) dateFilter.$gte = new Date(searchParams.get("date_from"));
   if (searchParams.get("date_to")) dateFilter.$lte = new Date(searchParams.get("date_to"));
 
+  // Matches the page by template rather than by exact path, so one heatmap
+  // covers every URL behind "/products/:id".
+  const pageFilter = pageMatchFilter(page);
+
   let points = [];
 
   if (type === "gaze") {
     const fixations = await Fixation.find({
       project_id: id,
-      page_url: page.path,
+      ...pageFilter,
       ...(Object.keys(dateFilter).length ? { start_timestamp: dateFilter } : {}),
     })
       .select("center_x center_y duration_ms")
@@ -47,7 +52,7 @@ export async function GET(request, { params }) {
   } else if (type === "click") {
     const events = await Event.find({
       "metadata.project_id": id,
-      page_url: page.path,
+      ...pageFilter,
       type: "click",
       ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
     })
@@ -62,7 +67,7 @@ export async function GET(request, { params }) {
   } else if (type === "cursor") {
     const events = await Event.find({
       "metadata.project_id": id,
-      page_url: page.path,
+      ...pageFilter,
       type: "cursor",
       ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
     })
@@ -81,7 +86,7 @@ export async function GET(request, { params }) {
     // We fetch ALL events (cursor, gaze, click, visibility) to act as a continuous timer
     const events = await Event.find({
       "metadata.project_id": id,
-      page_url: page.path,
+      ...pageFilter,
       ...(Object.keys(dateFilter).length ? { timestamp: dateFilter } : {}),
     })
       .sort({ timestamp: 1 })

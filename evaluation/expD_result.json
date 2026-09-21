@@ -1,0 +1,75 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "gridPitchPx": 20,
+  "sampled": 3240,
+  "resolvable": 3240,
+  "naiveOnInstrument": 3240,
+  "lmOnInstrument": 0,
+  "naiveMatchesTruth": 0,
+  "lmMatchesTruth": 3240,
+  "distinctTruth": 9,
+  "distinctNaive": 1,
+  "distinctLm": 9,
+  "topTruth": [
+    {
+      "element": "#hero",
+      "samples": 1512
+    },
+    {
+      "element": "span.image-image",
+      "samples": 1016
+    },
+    {
+      "element": "section.promo-row",
+      "samples": 252
+    },
+    {
+      "element": "header.nav-root",
+      "samples": 196
+    },
+    {
+      "element": "div.tile",
+      "samples": 172
+    }
+  ],
+  "topNaive": [
+    {
+      "element": "#webgazerGazeDot",
+      "samples": 3240
+    }
+  ],
+  "topLm": [
+    {
+      "element": "#hero",
+      "samples": 1512
+    },
+    {
+      "element": "span.image-image",
+      "samples": 1016
+    },
+    {
+      "element": "section.promo-row",
+      "samples": 252
+    },
+    {
+      "element": "header.nav-root",
+      "samples": 196
+    },
+    {
+      "element": "div.tile",
+      "samples": 172
+    }
+  ],
+  "naiveMisattributionPct": "100.0",
+  "lmMisattributionPct": "0.0",
+  "naiveAgreementPct": "0.0",
+  "lmAgreementPct": "100.0",
+  "calibrationOverlay": {
+    "topOfStack": "#webgazer-calibration-overlay",
+    "clientSideTestCatchesIt": false,
+    "serverSideTestCatchesIt": true
+  }
+}

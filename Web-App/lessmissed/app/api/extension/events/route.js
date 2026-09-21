@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongoose";
 import Event from "@/lib/models/Event";
 import Session from "@/lib/models/Session";
+import { normalizePath } from "@/lib/pathTemplate";
 
 // POST /api/extension/events
 // Body: { session_id, events: [{ timestamp, type, page_url, data }] }
@@ -31,12 +32,16 @@ export async function POST(request) {
     return NextResponse.json({ error: "Session is abandoned" }, { status: 409 });
   }
 
-  // Map incoming events to Event model shape
+  // Map incoming events to Event model shape. The template is resolved here
+  // rather than in the extension so there is one implementation of page identity,
+  // and so it can be corrected by re-running the backfill without shipping a new
+  // extension build.
   const docs = events.map((ev) => ({
     timestamp: new Date(ev.timestamp),
     session_id,
     type: ev.type,
     page_url: ev.page_url ?? "/",
+    page_template: normalizePath(ev.page_url ?? "/"),
     data: ev.data ?? {},
     metadata: {
       project_id: session.project_id,

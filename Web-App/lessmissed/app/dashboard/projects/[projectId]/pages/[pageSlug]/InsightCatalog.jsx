@@ -60,6 +60,9 @@ const ALL_INSIGHTS = {
   ],
 };
 
+// Derived from the catalog itself so the header cannot drift out of step with it.
+const TOTAL_INSIGHTS = Object.values(ALL_INSIGHTS).reduce((n, list) => n + list.length, 0);
+
 /* ─── shared micro-components ─────────────────────────────────────────────── */
 
 function LiveBadge() {
@@ -510,7 +513,7 @@ export default function InsightCatalog({ projectId, insights, elements }) {
         <div>
           <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Insight Engine</h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-            22 insights · {liveCount} live in this category · {insightList.length - liveCount} coming in Phase 2
+            {TOTAL_INSIGHTS} insights · {liveCount} live in this category · {insightList.length - liveCount} coming in Phase 2
           </p>
         </div>
       </div>

@@ -6,22 +6,24 @@ import './popup.css';
 // Types
 // ---------------------------------------------------------------------------
 
-type ScreenshotStatus = 'idle' | 'capturing' | 'done' | 'error';
 type ResolveStatus = 'loading' | 'ok' | 'no-project' | 'unauthed';
-
-interface StoredScreenshot {
-  ok: boolean;
-  url?: string;
-  error?: string;
-  pageSlug: string;
-  capturedAt: number;
-}
 
 interface ResolvedProject {
   consumer_id: string;
   project_id: string;
   project_name: string;
   domain: string;
+}
+
+/** What the background worker reports about the running session. It is the
+ *  authority now — the content script only knows about the page it is on, so
+ *  asking it would read "stopped" on any page the session has not reached. */
+interface SessionState {
+  active: boolean;
+  session_id?: string;
+  paused?: boolean;
+  current_path?: string;
+  pages_visited?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,6 +43,14 @@ function sendToActiveTab(message: object): Promise<any> {
   });
 }
 
+function sendToBackground(message: object): Promise<any> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      resolve(chrome.runtime.lastError ? null : response);
+    });
+  });
+}
+
 const WEBAPP_URL = __API_BASE__;
 
 // ---------------------------------------------------------------------------
@@ -48,28 +58,26 @@ const WEBAPP_URL = __API_BASE__;
 // ---------------------------------------------------------------------------
 
 const App: React.FC = () => {
-  const [isTracking, setIsTracking]           = useState(false);
+  const [session, setSession]                 = useState<SessionState>({ active: false });
   const [isCalibrating, setIsCalibrating]     = useState(false);
   const [isDotVisible, setIsDotVisible]       = useState(true);
-  const [ssStatus, setSsStatus]               = useState<ScreenshotStatus>('idle');
-  const [ssUrl, setSsUrl]                     = useState<string | null>(null);
-  const [ssError, setSsError]                 = useState<string | null>(null);
   const [currentTab, setCurrentTab]           = useState<chrome.tabs.Tab | null>(null);
+  // Why a start attempt failed. Used to borrow the screenshot error slot, which
+  // went away with the capture UI — but the failure itself is still real.
+  const [startError, setStartError]           = useState<string | null>(null);
 
   // Project resolution state
   const [resolveStatus, setResolveStatus]     = useState<ResolveStatus>('loading');
   const [resolved, setResolved]               = useState<ResolvedProject | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  const isTracking = session.active;
 
   // ---- On mount ----
   useEffect(() => {
-    // Sync tracking state from content script
+    // The gaze dot lives in the page, so that one flag still comes from the
+    // content script — everything else about the session comes from background.
     sendToActiveTab({ action: 'STATUS' }).then((res) => {
-      if (res) {
-        setIsTracking(res.status === 'started');
-        setIsDotVisible(res.dotVisible ?? true);
-        if (res.session_id) setActiveSessionId(res.session_id);
-      }
+      if (res) setIsDotVisible(res.dotVisible ?? true);
     });
 
     // Get current tab then resolve project
@@ -100,72 +108,57 @@ const App: React.FC = () => {
         .catch(() => setResolveStatus('no-project'));
     });
 
-    // Poll chrome.storage for screenshot completion (background writes here)
-    const interval = setInterval(() => {
-      chrome.storage.local.get('lastScreenshot', (data: { lastScreenshot?: StoredScreenshot }) => {
-        const ss = data.lastScreenshot;
-        if (!ss || Date.now() - ss.capturedAt > 60000) return;
-        if (ss.ok && ss.url) {
-          setSsStatus('done');
-          setSsUrl(ss.url);
-        } else if (!ss.ok) {
-          setSsStatus('error');
-          setSsError(ss.error ?? null);
-        }
+    // Poll the worker for session state while the popup is open.
+    // The session advances a page every few seconds while the popup is open.
+    const poll = () => {
+      sendToBackground({ action: 'SESSION_STATUS' }).then((res) => {
+        if (res) setSession(res);
       });
-    }, 800);
+    };
 
+    poll();
+    const interval = setInterval(poll, 800);
     return () => clearInterval(interval);
   }, []);
 
   // ---- Tracking toggle ----
   const toggleTracking = useCallback(async () => {
     if (isTracking) {
-      // Stop content script first — response includes the session_id
-      const res = await sendToActiveTab({ action: 'STOP' });
-      const sid = res?.session_id ?? activeSessionId;
-      setIsTracking(false);
-      setActiveSessionId(null);
-      chrome.storage.local.remove('activeSessionId');
-
-      // Finalize session via background
-      if (sid) {
-        chrome.runtime.sendMessage({
-          action: 'SESSION_END',
-          session_id: sid,
-          ended_at: new Date().toISOString(),
-        });
-      }
-    } else {
-      if (!resolved) return; // resolve not ready
-
-      let pageUrl = '/';
-      try { pageUrl = new URL(currentTab?.url ?? '/').pathname; } catch {}
-
-      // Create session via background → background forwards START with session_id to content script
-      chrome.runtime.sendMessage(
-        {
-          action: 'SESSION_START',
-          project_id: resolved.project_id,
-          consumer_id: resolved.consumer_id,
-          page_url: pageUrl,
-        },
-        (res) => {
-          if (chrome.runtime.lastError) return;
-          if (res?.error === 'content_script_not_ready') {
-            setSsStatus('error');
-            setSsError('Reload the page (F5), then retry.');
-            return;
-          }
-          if (res?.ok) {
-            setIsTracking(true);
-            setActiveSessionId(res.session_id);
-            chrome.storage.local.set({ activeSessionId: res.session_id });
-          }
-        }
-      );
+      // The worker holds the journey, so it runs the whole shutdown: STOP to
+      // the tracked tab, then finalise. Screenshots are the server's job now.
+      setSession({ active: false });
+      await sendToBackground({ action: 'SESSION_END' });
+      return;
     }
-  }, [isTracking, resolved, activeSessionId, currentTab]);
+
+    if (!resolved) return; // resolve not ready
+
+    let pageUrl = '/';
+    try { pageUrl = new URL(currentTab?.url ?? '/').pathname; } catch {}
+
+    const res = await sendToBackground({
+      action: 'SESSION_START',
+      project_id: resolved.project_id,
+      consumer_id: resolved.consumer_id,
+      // Background needs the domain to decide, on every navigation, whether the
+      // consumer is still on the brand's site.
+      domain: resolved.domain,
+      page_url: pageUrl,
+    });
+
+    if (res?.error === 'content_script_not_ready') {
+      setStartError('Reload the page (F5), then start again.');
+      return;
+    }
+    if (!res?.ok) {
+      setStartError(res?.error ?? 'Could not start tracking.');
+      return;
+    }
+    if (res?.ok) {
+      setStartError(null);
+      setSession({ active: true, session_id: res.session_id, pages_visited: 1, current_path: pageUrl });
+    }
+  }, [isTracking, resolved, currentTab]);
 
   // ---- Calibration ----
   const calibrate = useCallback(() => {
@@ -181,55 +174,13 @@ const App: React.FC = () => {
     if (res) setIsDotVisible(res.dotVisible);
   }, []);
 
-  // ---- Screenshot ----
-  const takeScreenshot = useCallback(async () => {
-    if (ssStatus === 'capturing') return;
-
-    // Resolve project_id — prefer in-memory, fall back to storage
-    let pid = resolved?.project_id ?? null;
-    if (!pid) {
-      pid = await new Promise<string | null>((r) =>
-        chrome.storage.local.get('resolvedProjectId', (d) => r((d as any).resolvedProjectId ?? null))
-      );
-    }
-    if (!pid) { setSsStatus('error'); return; }
-
-    setSsStatus('capturing');
-    setSsUrl(null);
-    setSsError(null);
-
-    let pageUrl = '/';
-    let pageSlug = 'home';
-    if (currentTab?.url) {
-      try {
-        const u = new URL(currentTab.url);
-        pageUrl = u.pathname;
-        pageSlug = u.pathname.replace(/^\//, '').replace(/\//g, '-') || 'home';
-      } catch {}
-    }
-
-    chrome.storage.local.remove('lastScreenshot');
-
-    chrome.runtime.sendMessage(
-      { action: 'TAKE_SCREENSHOT', projectId: pid, pageUrl, pageSlug },
-      (res) => {
-        if (!res?.ok) setSsStatus('error');
-      }
-    );
-  }, [ssStatus, currentTab, resolved]);
-
   // ---- Derived display ----
   const domain = currentTab?.url
     ? (() => { try { return new URL(currentTab.url).hostname; } catch { return '—'; } })()
     : '—';
 
-  const ssLabel =
-    ssStatus === 'capturing' ? 'Capturing…' :
-    ssStatus === 'done'      ? 'Captured ✓' :
-    ssStatus === 'error'     ? 'Retry capture' :
-                               'Capture page';
-
   const canTrack = resolveStatus === 'ok';
+  const pageCount = session.pages_visited ?? 0;
 
   return (
     <div className="container">
@@ -258,6 +209,24 @@ const App: React.FC = () => {
         {isTracking ? 'Stop Tracking' : 'Start Tracking'}
       </button>
 
+      {/* Live journey — a session now spans the whole site, so the page it
+          started on is no longer the whole story. */}
+      {isTracking && (
+        <div className={`journey${session.paused ? ' journey--paused' : ''}`}>
+          {session.paused ? (
+            <p className="journey-state">⏸ Paused — off site</p>
+          ) : (
+            <p className="journey-state">● Recording</p>
+          )}
+          <p className="journey-detail">
+            {pageCount} {pageCount === 1 ? 'page' : 'pages'} this session
+          </p>
+          {session.current_path && !session.paused && (
+            <p className="journey-path" title={session.current_path}>{session.current_path}</p>
+          )}
+        </div>
+      )}
+
       <button className="btn calibrate" onClick={calibrate} disabled={isCalibrating}>
         {isCalibrating ? 'Calibrating…' : 'Calibrate'}
       </button>
@@ -266,36 +235,7 @@ const App: React.FC = () => {
         {isDotVisible ? 'Hide Gaze Dot' : 'Show Gaze Dot'}
       </button>
 
-      <hr className="divider" />
-
-      <p className="section-label">Heatmap snapshot</p>
-
-      <button
-        className={`btn screenshot${ssStatus === 'done' ? ' done' : ssStatus === 'error' ? ' error' : ''}`}
-        onClick={takeScreenshot}
-        disabled={ssStatus === 'capturing' || !canTrack}
-      >
-        {ssLabel}
-      </button>
-
-      {ssStatus === 'capturing' && <p className="ss-note">Scrolling &amp; stitching full page…</p>}
-      {ssStatus === 'done' && ssUrl && (
-        <p className="ss-note">
-          Saved ·{' '}
-          <a href={`${WEBAPP_URL}/dashboard`} target="_blank" rel="noreferrer">
-            View in dashboard →
-          </a>
-        </p>
-      )}
-      {ssStatus === 'error' && (
-        <p className="ss-note error">
-          {ssError?.includes('content script not ready')
-            ? 'Reload the page (F5), then retry.'
-            : ssError
-            ? `Error: ${ssError}`
-            : 'Capture failed. Check the DevTools console.'}
-        </p>
-      )}
+      {startError && <p className="ss-note error">{startError}</p>}
     </div>
   );
 };

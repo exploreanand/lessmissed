@@ -35,7 +35,23 @@ export default async function SessionReplayPage({ params }) {
 
   if (!session) notFound();
 
-  const pagesVisited = (session.pages_visited ?? []).map((p) => p.path);
+  // The full journey, not just a list of paths. Every page the consumer reached
+  // records its own dwell, fixations and clicks, so the ordered trip through the
+  // site is readable here instead of a bare count that was always 1.
+  const slugByTemplate = new Map((project.pages ?? []).map((p) => [p.path, p.slug]));
+
+  const journey = (session.pages_visited ?? []).map((visit) => {
+    const template = visit.template ?? visit.path;
+    return {
+      path: visit.path,
+      template,
+      slug: slugByTemplate.get(template) ?? null,
+      dwellMs: visit.dwell_ms ?? 0,
+      fixations: visit.fixation_count ?? 0,
+      clicks: visit.click_count ?? 0,
+      scrollDepth: Math.round(visit.max_scroll_depth_percent ?? 0),
+    };
+  });
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
@@ -76,7 +92,7 @@ export default async function SessionReplayPage({ params }) {
               <div className="flex items-center justify-between">
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">Pages visited</span>
                 <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                  {pagesVisited.length}
+                  {journey.length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -123,17 +139,39 @@ export default async function SessionReplayPage({ params }) {
             )}
 
             <div>
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">Pages visited</p>
-              <ol className="space-y-1.5">
-                {pagesVisited.map((url, i) => (
-                  <li key={i} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-                    <span className="flex-shrink-0 h-4 w-4 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 flex items-center justify-center font-semibold text-[9px]">
-                      {i + 1}
-                    </span>
-                    <span className="font-mono truncate">{url}</span>
-                  </li>
-                ))}
-              </ol>
+              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">Journey</p>
+              {journey.length === 0 ? (
+                <p className="text-xs text-zinc-400">No pages recorded.</p>
+              ) : (
+                <ol className="space-y-2">
+                  {journey.map((step, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-0.5 shrink-0 h-4 w-4 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 flex items-center justify-center font-semibold text-[9px]">
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        {step.slug ? (
+                          <Link
+                            href={`/dashboard/projects/${projectId}/pages/${step.slug}`}
+                            className="block font-mono text-xs text-zinc-700 dark:text-zinc-300 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                            title={step.path}
+                          >
+                            {step.path}
+                          </Link>
+                        ) : (
+                          <span className="block font-mono text-xs text-zinc-700 dark:text-zinc-300 truncate" title={step.path}>
+                            {step.path}
+                          </span>
+                        )}
+                        <p className="text-[10px] text-zinc-400 mt-0.5">
+                          {formatDuration(step.dwellMs)} · {step.fixations} fixations ·{" "}
+                          {step.clicks} clicks · {step.scrollDepth}% scrolled
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           </div>
 

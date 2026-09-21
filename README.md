@@ -62,14 +62,33 @@ npm run dev                  # http://localhost:3000
 
 **Stack:** TypeScript · React 17 · Webpack 5
 
-The extension runs in the consumer's browser and captures behavioral signals from pages configured by clients.
+The extension runs in the consumer's browser and captures behavioral signals across a
+brand's whole site. The consumer presses Start once; tracking then follows them from
+page to page for the rest of the visit.
 
 | Component | Role |
 |-----------|------|
-| `contentScript.ts` | Injected into tracked pages — collects gaze, click, scroll, hover, and visibility events |
-| `background.ts` | Service worker — batches and sends data to the API |
-| `popup/` | Extension UI — shows active tasks and status |
+| `contentScript.ts` | Injected into every page — collects gaze, click, scroll, hover, and visibility events. Holds no session state: it asks the worker on each load whether a session is running (`SESSION_HELLO`) and resumes if so |
+| `background.ts` | Service worker — **owns the session**. Follows navigation, records page transitions, batches events to the API, and captures deferred screenshots. State is mirrored to `chrome.storage.local` because MV3 terminates workers freely |
+| `popup/` | Extension UI — start/stop, live page count, paused state |
 | `options/` | Settings page |
+
+### Site-wide tracking
+
+- **Session continuity.** A full page load destroys the content script, so the worker is
+  the only thing that survives a navigation. It binds the session to one tab, follows
+  `chrome.tabs.onUpdated`, and transfers to a tab opened from the tracked one (product
+  links open with `target="_blank"` constantly).
+- **Off-site pauses, it does not end.** Leaving the brand's domain suspends collection;
+  returning resumes it.
+- **Pages discover themselves.** Every transition posts to `/api/extension/visits`, which
+  registers pages it has not seen. URLs are templated first — `/products/8812` and
+  `/products/9143` both become `/products/:id`, so a 5000-product store yields one page
+  row rather than 5000. See `lib/pathTemplate.js`.
+- **Screenshots are deferred.** `captureVisibleTab` only photographs a visible tab, and
+  scroll-and-stitch would drag the page out from under a consumer whose gaze is being
+  recorded. Pages needing a screenshot are queued and captured together, in a dedicated
+  window, after the consumer stops.
 
 ### Getting started
 
@@ -101,6 +120,24 @@ LessMissed collects five behavioral signals per page visit:
 - **Visibility** — which elements entered the viewport and for how long
 
 These signals feed an **Engagement Score** engine that outputs 23 insight types — from attention hotspots to drop-off predictions.
+
+Because a session spans a site, each is also attributed to the individual page visit it
+happened on, giving per-page dwell, fixation and click counts plus the page-to-page flow
+(`GET /api/projects/:id/flow`).
+
+### Migrating existing data
+
+Sessions recorded before site-wide capture hold only their entry page, and their events
+carry no page template. Both are recoverable from data already in Mongo:
+
+```bash
+cd Web-App/lessmissed
+node scripts/backfill-templates.mjs --dry-run   # inspect, write nothing
+node scripts/backfill-templates.mjs             # apply
+node scripts/relabel-pages.mjs                  # re-key region maps onto templates
+```
+
+It is idempotent, and honours `MONGODB_URI` so it can be rehearsed against a staging copy.
 
 ---
 

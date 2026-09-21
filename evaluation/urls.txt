@@ -1,0 +1,11 @@
+# One URL per line. Lines beginning with # are ignored.
+# Aim for 8-12 pages: a mix of commerce home pages, category/listing pages,
+# product detail pages and a couple of content-heavy pages, so the collision
+# figure is not driven entirely by tile grids.
+https://www.myntra.com/
+https://www.flipkart.com/
+https://www.amazon.in/
+https://www.nykaa.com/
+https://www.ajio.com/
+https://en.wikipedia.org/wiki/Eye_tracking
+https://news.ycombinator.com/

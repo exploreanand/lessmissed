@@ -1,6 +1,7 @@
 import Fixation from "@/lib/models/Fixation";
 import { describeElement } from "@/lib/insights/describeElement";
 import Session from "@/lib/models/Session";
+import { pageMatchFilter } from "@/lib/pathTemplate";
 
 // INS-G04: First Fixation Point — the first 200ms+ fixation per session on a page,
 // aggregated to find the most common first-look region. SRS §7.1.
@@ -52,11 +53,17 @@ function emptyResult(totalSessions) {
 // not schema-cast its $match, so project._id must already be an ObjectId, and the
 // page subdoc carries the screenshot dimensions the grid math needs.
 export async function computeFirstFixation(project, page) {
-  // Session query is deliberately NOT filtered by "pages_visited.path" — same reason
-  // as pages/[pageSlug]/page.jsx: wildcard page paths make per-page session queries
-  // unreliable, and this keeps total_sessions consistent with the sibling cards.
+  // Scoped to the sessions that actually reached this page. This used to count
+  // every session in the project, because raw visit paths could not be matched
+  // against a wildcard page — with pages_visited.template written per visit, the
+  // question has a real answer, and on a site-wide project the difference is
+  // large: a session that only saw the home page is not a first look at checkout.
   const sessions = await Session.find(
-    { project_id: project._id, status: "completed" },
+    {
+      project_id: project._id,
+      status: "completed",
+      "pages_visited.template": page.path,
+    },
     { session_id: 1, pages_visited: 1, started_at: 1 }
   ).lean();
 
@@ -66,7 +73,7 @@ export async function computeFirstFixation(project, page) {
     {
       $match: {
         project_id: project._id,
-        page_url: page.path,
+        ...pageMatchFilter(page),
         duration_ms: { $gte: MIN_FIRST_FIXATION_MS },
       },
     },
@@ -93,13 +100,14 @@ export async function computeFirstFixation(project, page) {
   if (!firsts.length) return emptyResult(totalSessions);
 
   // Page entry time per session, used only for time-to-first-fixation. Re-entries
-  // collapse into the first visit — INS-G04 is one first look per session, not per visit.
-  // pages_visited is only reliably populated for the session's entry page, so the
-  // started_at fallback makes this exact for entry pages and approximate elsewhere.
+  // collapse into the first visit — INS-G04 is one first look per session, not per
+  // visit. Every page a consumer reaches now records its own entry time, so this
+  // is exact wherever the visit was captured; started_at remains the fallback for
+  // sessions recorded before site-wide tracking.
   const enteredAt = {};
   for (const s of sessions) {
     const visits = (s.pages_visited ?? [])
-      .filter((v) => v.path === page.path && v.entered_at)
+      .filter((v) => (v.template ?? v.path) === page.path && v.entered_at)
       .map((v) => new Date(v.entered_at).getTime());
     enteredAt[s.session_id] = visits.length
       ? Math.min(...visits)

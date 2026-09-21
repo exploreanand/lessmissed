@@ -6,6 +6,7 @@ import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
 import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
+import { pageMatchFilter } from "@/lib/pathTemplate";
 import HeatmapViewer from "./HeatmapViewer";
 import InsightCatalog from "./InsightCatalog";
 
@@ -18,13 +19,18 @@ export default async function PageDetailPage({ params }) {
   const page = project.pages.find((p) => p.slug === pageSlug);
   if (!page) notFound();
 
-  // All completed sessions for this project (wildcard page paths make per-page session queries unreliable)
+  // Completed sessions that actually reached this page. This used to be every
+  // session in the project — per-page scoping was impossible while a wildcard
+  // page path could not be matched against a raw visit path. Each visit now
+  // carries the template it resolved to, so the count means what it says.
   const sessions = await Session.find({
     project_id: project._id,
     status: "completed",
+    "pages_visited.template": page.path,
   }).lean();
 
   const totalSessions = sessions.length;
+  const pageFilter = pageMatchFilter(page);
 
   const avgEngagementScore =
     totalSessions > 0
@@ -52,7 +58,7 @@ export default async function PageDetailPage({ params }) {
     // single "img.image-image" covers the hero, the promo strip and every
     // category tile.
     Fixation.aggregate([
-      { $match: { project_id: project._id, page_url: page.path } },
+      { $match: { project_id: project._id, ...pageFilter } },
       {
         $group: {
           // region → positional key → selector. The middle rung matters for
@@ -76,7 +82,7 @@ export default async function PageDetailPage({ params }) {
       {
         $match: {
           "metadata.project_id": project._id,
-          page_url: page.path,
+          ...pageFilter,
           type: "click",
         },
       },

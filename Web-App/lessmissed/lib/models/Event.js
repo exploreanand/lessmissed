@@ -12,6 +12,11 @@ const eventSchema = new mongoose.Schema(
       required: true,
     },
     page_url: { type: String, required: true },
+    // The page this URL belongs to, from lib/pathTemplate.js — "/products/8812"
+    // and "/products/9143" both store "/products/:id". page_url keeps the raw
+    // path; every insight query groups on the template, because a store with
+    // 5000 products otherwise yields 5000 single-session pages.
+    page_template: { type: String, default: null },
     data: { type: mongoose.Schema.Types.Mixed, default: {} },
     metadata: {
       project_id: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
@@ -29,5 +34,6 @@ const eventSchema = new mongoose.Schema(
 
 eventSchema.index({ session_id: 1, type: 1 });
 eventSchema.index({ "metadata.project_id": 1, timestamp: -1 });
+eventSchema.index({ "metadata.project_id": 1, page_template: 1, type: 1 });
 
 export default mongoose.models.Event || mongoose.model("Event", eventSchema);

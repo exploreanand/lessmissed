@@ -2,19 +2,24 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { normalizePath } from "@/lib/pathTemplate";
 
 const STEPS = ["Project details", "Target pages", "Create task", "Add reward"];
 
-function slugFromPath(path) {
-  const seg = path.replace(/^\//, "").split("/")[0].replace(/[^a-z0-9-]/gi, "");
-  return seg || "home";
-}
-
-function parsePaths(text) {
+/**
+ * One entry per non-empty line, whatever shape it is in.
+ *
+ * The server resolves each against the project's domain, so a full URL pasted
+ * from the browser bar, a bare host and a plain path all work. The previous
+ * version kept only lines starting with "/", which meant pasting
+ * "https://site.com/pricing" — the single most likely thing an admin does —
+ * added nothing at all and reported no error.
+ */
+function parseTargets(text) {
   return text
     .split("\n")
     .map((l) => l.trim())
-    .filter((l) => l.startsWith("/"));
+    .filter(Boolean);
 }
 
 export default function SetupWizardPage() {
@@ -23,6 +28,9 @@ export default function SetupWizardPage() {
   const [clientId, setClientId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // Set when the project was created but some pages were rejected, so the admin
+  // can read what happened and then continue under their own steam.
+  const [createdProjectId, setCreatedProjectId] = useState(null);
 
   const [form, setForm] = useState({
     projectName: "",
@@ -53,10 +61,15 @@ export default function SetupWizardPage() {
     }
 
     const domain = form.projectUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-    const targetPaths = parsePaths(form.targetPages);
+    const targetUrls = parseTargets(form.targetPages);
     if (!form.projectName || !domain) {
       setError("Project name and URL are required.");
       setStep(0);
+      return;
+    }
+    if (!targetUrls.length) {
+      setError("Add at least one page to track.");
+      setStep(1);
       return;
     }
 
@@ -64,25 +77,38 @@ export default function SetupWizardPage() {
     setError("");
 
     try {
-      // 1. Create project
-      const pages = targetPaths.map((path) => ({
-        path,
-        slug: slugFromPath(path),
-        type: path.includes(":") || path.includes("*") ? "wildcard" : "exact",
-      }));
-
+      // 1. Create the project and register its target pages in one call.
+      //
+      // The pages are no longer built here. The server runs each URL through
+      // addTargetPage — the same path the dashboard's "Add page" uses — which
+      // validates it, stores the concrete capture_url and queues the baseline.
+      // Building the subdocuments client-side is what left first-setup pages
+      // with no capture_url and no job, so they were never photographed until
+      // the admin re-added them from the dashboard.
       const projRes = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: clientId, name: form.projectName, domain, pages }),
+        body: JSON.stringify({ name: form.projectName, domain, target_urls: targetUrls }),
       });
-      if (!projRes.ok) throw new Error("Failed to create project");
+      if (!projRes.ok) {
+        const detail = await projRes.json().catch(() => ({}));
+        throw new Error(detail.error || "Failed to create project");
+      }
       const project = await projRes.json();
       const projectId = project._id;
 
+      // A URL the server could not accept (wrong domain, unreachable) does not
+      // fail the project, but the admin must be told rather than left to notice
+      // a missing page later.
+      const rejected = (project.target_pages ?? []).filter((p) => !p.ok);
+
       // 2. Create task (if name provided)
       let couponId = null;
-      const taskPaths = parsePaths(form.taskPages || form.targetPages);
+      // Task.pages holds path templates, not URLs — normalise, because the
+      // target box now accepts full URLs.
+      const taskPaths = parseTargets(form.taskPages || form.targetPages).map((entry) =>
+        normalizePath(entry)
+      );
 
       if (form.taskName) {
         const now = new Date();
@@ -144,7 +170,20 @@ export default function SetupWizardPage() {
         }
       }
 
-      router.push(`/dashboard/projects/${projectId}`);
+      // Everything accepted — straight to the project, where the previews are
+      // already being prepared.
+      if (!rejected.length) {
+        router.push(`/dashboard/projects/${projectId}`);
+        return;
+      }
+
+      // Otherwise stop here and say which pages did not make it. Navigating
+      // away would leave the admin to discover the gap on their own.
+      setCreatedProjectId(projectId);
+      setError(
+        `Project created, but ${rejected.length} page${rejected.length > 1 ? "s" : ""} could not be added:\n` +
+          rejected.map((p) => `• ${p.url} — ${p.error}`).join("\n")
+      );
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
@@ -186,7 +225,17 @@ export default function SetupWizardPage() {
 
         {error && (
           <div className="mb-5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-3.5 py-2.5 text-sm text-red-700 dark:text-red-400">
-            {error}
+            {/* whitespace-pre-line so a per-URL rejection list stays readable */}
+            <p className="whitespace-pre-line">{error}</p>
+            {createdProjectId && (
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/projects/${createdProjectId}`)}
+                className="mt-2 font-semibold underline underline-offset-2"
+              >
+                Continue to project →
+              </button>
+            )}
           </div>
         )}
 
@@ -222,23 +271,25 @@ export default function SetupWizardPage() {
           <div className="space-y-5">
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Add target pages</h2>
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Enter the URL paths on your site you want to track. The LessMissed extension handles everything — no code changes needed on your website.
+              These are the pages LessMissed reports on. Everything else on your site is ignored,
+              so start with the ones that matter — your homepage, pricing, a key landing page.
+              No code changes needed on your website.
             </p>
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                Pages to track <span className="text-zinc-400 font-normal">(one per line — exact paths or wildcards)</span>
+                Pages to track <span className="text-zinc-400 font-normal">(one per line — paste a URL or type a path)</span>
               </label>
               <textarea
                 value={form.targetPages}
                 onChange={(e) => update("targetPages", e.target.value)}
                 rows={5}
-                placeholder={"/\n/products/:id\n/cart\n/checkout\n/blog/*"}
+                placeholder={`https://${form.projectUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "") || "yoursite.com"}/\n/pricing\n/products/8812`}
                 className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3.5 py-2.5 text-sm font-mono text-zinc-900 dark:text-zinc-50 placeholder-zinc-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 resize-none"
               />
             </div>
             <div className="rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-4 text-sm text-violet-800 dark:text-violet-300 space-y-1.5">
-              <p><strong>How it works:</strong> When a consumer starts a task, our Chrome extension activates on these pages only.</p>
-              <p>The extension automatically captures a full-page screenshot and streams gaze, click, and scroll data — giving you accurate heatmaps without any changes to your website.</p>
+              <p><strong>What happens next:</strong> each page is checked and a preview of it is prepared automatically. You can add more, or take a fresh preview, any time from the project.</p>
+              <p>For a page that stands for many — a product, a blog post — give one real example. <code>/products/8812</code> becomes <code>/products/:id</code>, one row covering every product, previewed from the URL you gave.</p>
             </div>
           </div>
         )}
@@ -343,7 +394,20 @@ export default function SetupWizardPage() {
           {step < STEPS.length - 1 ? (
             <button
               type="button"
-              onClick={() => setStep((s) => s + 1)}
+              onClick={() => {
+                // Validate on the step that owns the field, rather than bouncing
+                // the admin back here from the final screen.
+                if (step === 0 && (!form.projectName.trim() || !form.projectUrl.trim())) {
+                  setError("Project name and site URL are required.");
+                  return;
+                }
+                if (step === 1 && !parseTargets(form.targetPages).length) {
+                  setError("Add at least one page to track — this is what LessMissed captures.");
+                  return;
+                }
+                setError("");
+                setStep((s) => s + 1);
+              }}
               className="rounded-xl bg-violet-600 px-5 py-2 text-sm font-semibold text-white hover:bg-violet-500 transition-colors"
             >
               Continue →

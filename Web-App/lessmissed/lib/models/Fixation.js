@@ -6,6 +6,10 @@ const fixationSchema = new mongoose.Schema(
     session_id: { type: String, required: true },
     project_id: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: true },
     page_url: { type: String, required: true },
+    // Page identity — see Event.page_template. Fixations are grouped by page,
+    // so this is what lets one product template's attention aggregate across
+    // every product id a consumer happened to open.
+    page_template: { type: String, default: null },
     element_id: { type: String, default: null },
     // Positionally unique key ("div>ul>li:nth-of-type(3)>p"). element_id alone
     // collapses every unclassed <p> on a page into one bucket.
@@ -40,5 +44,6 @@ const fixationSchema = new mongoose.Schema(
 fixationSchema.index({ session_id: 1, page_url: 1 });
 fixationSchema.index({ session_id: 1, element_id: 1 });
 fixationSchema.index({ project_id: 1, page_url: 1 });
+fixationSchema.index({ project_id: 1, page_template: 1 });
 
 export default mongoose.models.Fixation || mongoose.model("Fixation", fixationSchema);

@@ -5,6 +5,7 @@ import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
 import { getSessionUser } from "@/lib/auth/session";
 import { getOwnedProject } from "@/lib/auth/ownership";
+import { pageMatchFilter } from "@/lib/pathTemplate";
 
 // GET /api/projects/:id/pages/:pageSlug/insights
 // Returns all Phase 1 computed insights for a page
@@ -19,9 +20,17 @@ export async function GET(request, { params }) {
   const page = project.pages.find((p) => p.slug === pageSlug);
   if (!page) return NextResponse.json({ error: "Page not found" }, { status: 404 });
 
+  const pageFilter = pageMatchFilter(page);
+
+  // Scoped on the visit template, which the visits endpoint keys to this page —
+  // "pages_visited.path" holds raw URLs and so never matched a wildcard page.
   const [acceptedSessions, allSessions] = await Promise.all([
-    Session.find({ project_id: project._id, status: "completed", "pages_visited.path": page.path }).lean(),
-    Session.find({ project_id: project._id, "pages_visited.path": page.path }).lean(),
+    Session.find({
+      project_id: project._id,
+      status: "completed",
+      "pages_visited.template": page.path,
+    }).lean(),
+    Session.find({ project_id: project._id, "pages_visited.template": page.path }).lean(),
   ]);
 
   const totalSessions = acceptedSessions.length;
@@ -48,7 +57,7 @@ export async function GET(request, { params }) {
   // INS-G03: Missed elements — elements with zero fixations
   const allElements = await Fixation.distinct("element_id", {
     project_id: project._id,
-    page_url: page.path,
+    ...pageFilter,
   });
 
   // INS-G04: First fixation point
@@ -68,7 +77,7 @@ export async function GET(request, { params }) {
 
   // INS-GC01: Looked but didn't click — aggregate across fixations and clicks
   const fixationElementCounts = await Fixation.aggregate([
-    { $match: { project_id: project._id, page_url: page.path } },
+    { $match: { project_id: project._id, ...pageFilter } },
     { $group: { _id: "$element_id", sessions: { $addToSet: "$session_id" } } },
   ]);
 
@@ -76,26 +85,35 @@ export async function GET(request, { params }) {
     {
       $match: {
         "metadata.project_id": project._id,
-        page_url: page.path,
+        ...pageFilter,
         type: "click",
       },
     },
     { $group: { _id: "$data.element_id", sessions: { $addToSet: "$session_id" } } },
   ]);
 
+  // Session ids, not counts: LBNC is defined over sessions that fixated AND
+  // clicked, so the intersection is required. Comparing bare counts lets an
+  // element clicked by sessions that never fixated it look better than it is.
   const clickMap = {};
-  clickElementCounts.forEach((c) => c._id && (clickMap[c._id] = c.sessions.length));
+  clickElementCounts.forEach((c) => c._id && (clickMap[c._id] = new Set(c.sessions)));
+
+  const bothCount = (f) => {
+    const clicked = clickMap[f._id];
+    return clicked ? f.sessions.filter((id) => clicked.has(id)).length : 0;
+  };
 
   const lookedNotClicked = fixationElementCounts
     .filter((f) => {
       const fixedSessions = f.sessions.length;
-      const clickedSessions = clickMap[f._id] ?? 0;
-      return fixedSessions > 0 && clickedSessions < fixedSessions * 0.5;
+      // LBNC(e) > 0.5 — more than half the sessions that looked did not act.
+      return fixedSessions > 0 && bothCount(f) < fixedSessions * 0.5;
     })
     .map((f) => ({
       element_id: f._id,
       pct_looked: Math.round((f.sessions.length / totalSessions) * 100),
-      pct_clicked: Math.round(((clickMap[f._id] ?? 0) / totalSessions) * 100),
+      pct_clicked: Math.round((bothCount(f) / totalSessions) * 100),
+      lbnc_pct: Math.round(((f.sessions.length - bothCount(f)) / f.sessions.length) * 100),
     }))
     .sort((a, b) => b.pct_looked - a.pct_looked)
     .slice(0, 5);

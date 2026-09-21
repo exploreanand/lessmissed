@@ -25,7 +25,9 @@ export async function GET(request, { params }) {
     if (searchParams.get("date_to")) filter.started_at.$lte = new Date(searchParams.get("date_to"));
   }
   if (searchParams.get("page")) {
-    filter["pages_visited.path"] = searchParams.get("page");
+    // ?page= takes a page template ("/products/:id"), the same key the dashboard
+    // routes pages by — matching raw visit paths would miss every wildcard page.
+    filter["pages_visited.template"] = searchParams.get("page");
   }
 
   const limit = Number(searchParams.get("limit") ?? 50);

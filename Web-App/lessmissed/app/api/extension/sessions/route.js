@@ -3,6 +3,7 @@ import { connectDB } from "@/lib/mongoose";
 import Session from "@/lib/models/Session";
 import Project from "@/lib/models/Project";
 import { nanoid } from "nanoid";
+import { normalizePath } from "@/lib/pathTemplate";
 
 // POST /api/extension/sessions
 // Body: { project_id, consumer_id, task_id, page_url, started_at }
@@ -24,6 +25,8 @@ export async function POST(request) {
   }
 
   const session_id = `sess_${nanoid(10)}`;
+  const startedAt = new Date(started_at ?? Date.now());
+  const entryTemplate = page_url ? normalizePath(page_url) : null;
 
   const session = await Session.create({
     session_id,
@@ -31,9 +34,15 @@ export async function POST(request) {
     task_id: task_id ?? null,
     project_id,
     status: "active",
-    pages_visited: page_url ? [{ path: page_url, entered_at: new Date(started_at ?? Date.now()) }] : [],
+    // The entry page only. Every page after it is appended by
+    // POST /api/extension/visits as the consumer moves through the site.
+    pages_visited: page_url
+      ? [{ path: page_url, template: entryTemplate, entered_at: startedAt }]
+      : [],
+    entry_template: entryTemplate,
+    exit_template: entryTemplate,
     pages_required: [],
-    started_at: new Date(started_at ?? Date.now()),
+    started_at: startedAt,
     engagement_score: 0,
     data_accepted: false,
   });

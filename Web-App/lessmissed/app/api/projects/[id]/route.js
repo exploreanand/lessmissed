@@ -6,6 +6,8 @@ import Event from "@/lib/models/Event";
 import Task from "@/lib/models/Task";
 import Coupon from "@/lib/models/Coupon";
 import ConsumerReward from "@/lib/models/ConsumerReward";
+import CaptureJob from "@/lib/models/CaptureJob";
+import PageCapture from "@/lib/models/PageCapture";
 import { deleteProjectFromS3 } from "@/lib/s3";
 import { getSessionUser } from "@/lib/auth/session";
 import { getOwnedProject } from "@/lib/auth/ownership";
@@ -54,6 +56,11 @@ export async function DELETE(request, { params }) {
       Task.deleteMany({ project_id: id }),
       Coupon.deleteMany({ project_id: id }),
       ConsumerReward.deleteMany({ coupon_id: { $in: couponIds } }),
+      // Capture records follow the project. Without this, queued jobs for a
+      // deleted project keep being leased by the worker, fail, and retry —
+      // and the PageCapture rows outlive the S3 objects the line below removes.
+      CaptureJob.deleteMany({ project_id: id }),
+      PageCapture.deleteMany({ project_id: id }),
       deleteProjectFromS3(id),
     ]);
 
