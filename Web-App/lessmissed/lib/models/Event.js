@@ -24,7 +24,8 @@ const eventSchema = new mongoose.Schema(
     },
   },
   {
-    // Tell Mongoose to use the "events" collection (time series configured via seed script)
+    // Tell Mongoose to use the "events" collection (created as a time series by
+    // ensureTimeseriesCollection in lib/mongoose.js on first connect)
     collection: "events",
     // Disable automatic _id so MongoDB time series can manage its own id
     _id: false,
