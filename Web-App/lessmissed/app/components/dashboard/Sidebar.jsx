@@ -117,8 +117,13 @@ export default function Sidebar({ mobileOpen, onClose }) {
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <div className="hidden lg:flex lg:w-64 lg:flex-shrink-0 h-screen sticky top-0">
+      {/* Desktop sidebar. No fixed width here: the panel inside sets it. This
+          used to reserve lg:w-64 (256px) while the panel, a flex item with no
+          width of its own, shrank to its content (~142px) — leaving a 114px
+          band of page background between the dark column and the navbar that
+          neither belonged to the page nor scrolled with it. Letting one element
+          own the width means the two can't disagree again. */}
+      <div className="hidden lg:flex lg:flex-shrink-0 h-screen sticky top-0">
         {content}
       </div>
 
