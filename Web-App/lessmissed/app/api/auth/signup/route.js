@@ -14,12 +14,19 @@ export async function POST(request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { name, email, password } = body;
+  const { name, email, password, type = "client" } = body;
   if (!name || !email || !password) {
     return NextResponse.json({ error: "name, email, and password are required" }, { status: 400 });
   }
   if (password.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+  }
+  // Two-sided model: "client" = brand/site owner who creates projects and
+  // reads analytics; "consumer" = test subject who contributes session data
+  // via the extension. Default is "client" for backward compatibility with
+  // any signup flow that hasn't yet been updated to send the field.
+  if (type !== "client" && type !== "consumer") {
+    return NextResponse.json({ error: "type must be 'client' or 'consumer'" }, { status: 400 });
   }
 
   const existing = await User.findOne({ email: email.toLowerCase() }).lean();
@@ -29,7 +36,7 @@ export async function POST(request) {
 
   const password_hash = await bcrypt.hash(password, 10);
   const user = await User.create({
-    type: "client",
+    type,
     email: email.toLowerCase(),
     password_hash,
     name,
@@ -37,7 +44,7 @@ export async function POST(request) {
   });
 
   const response = NextResponse.json(
-    { ok: true, userId: user._id.toString(), name: user.name },
+    { ok: true, userId: user._id.toString(), name: user.name, type: user.type },
     { status: 201 }
   );
   response.cookies.set(SESSION_COOKIE, user._id.toString(), {

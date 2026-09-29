@@ -6,9 +6,19 @@ import { useRouter } from "next/navigation";
 
 export default function SignupForm() {
   const router = useRouter();
+  const [role, setRole] = useState("client");
   const [form, setForm] = useState({ company: "", email: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const isConsumer = role === "consumer";
+  const nameLabel = isConsumer ? "Full name" : "Company name";
+  const namePlaceholder = isConsumer ? "Alex Rivera" : "Acme Inc.";
+  const emailLabel = isConsumer ? "Email" : "Work email";
+  const emailPlaceholder = isConsumer ? "you@example.com" : "you@company.com";
+  const hero = isConsumer
+    ? "Get rewarded for sharing your browsing signals with brands"
+    : "Start getting real gaze insights from day one";
 
   function handleChange(e) {
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
@@ -22,14 +32,21 @@ export default function SignupForm() {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.company, email: form.email, password: form.password }),
+        body: JSON.stringify({
+          name: form.company,
+          email: form.email,
+          password: form.password,
+          type: role,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Signup failed");
         return;
       }
-      router.push("/dashboard/setup");
+      // Clients configure a project; consumers just need the session cookie
+      // set — the extension takes it from here.
+      router.push(data.type === "consumer" ? "/" : "/dashboard/setup");
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -49,7 +66,40 @@ export default function SignupForm() {
 
       <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-8 shadow-sm">
         <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-1">Create your account</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">Start getting real gaze insights from day one</p>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">{hero}</p>
+
+        <div
+          role="tablist"
+          aria-label="Account type"
+          className="grid grid-cols-2 gap-1 p-1 mb-5 rounded-xl bg-zinc-100 dark:bg-zinc-800"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={role === "client"}
+            onClick={() => setRole("client")}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+              role === "client"
+                ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+            }`}
+          >
+            I'm a business
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={role === "consumer"}
+            onClick={() => setRole("consumer")}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+              role === "consumer"
+                ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+            }`}
+          >
+            I'm a test participant
+          </button>
+        </div>
 
         {error && (
           <div className="mb-4 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-3.5 py-2.5 text-sm text-red-700 dark:text-red-400">
@@ -59,26 +109,26 @@ export default function SignupForm() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Company name</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">{nameLabel}</label>
             <input
               type="text"
               name="company"
               required
               value={form.company}
               onChange={handleChange}
-              placeholder="Acme Inc."
+              placeholder={namePlaceholder}
               className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-900 dark:text-zinc-50 placeholder-zinc-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Work email</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">{emailLabel}</label>
             <input
               type="email"
               name="email"
               required
               value={form.email}
               onChange={handleChange}
-              placeholder="you@company.com"
+              placeholder={emailPlaceholder}
               className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-900 dark:text-zinc-50 placeholder-zinc-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
             />
           </div>

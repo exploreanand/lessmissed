@@ -26,7 +26,9 @@ export default function LoginForm() {
         setError(data.error ?? "Login failed");
         return;
       }
-      router.push("/dashboard/projects");
+      // Route by role: brand accounts go to the dashboard; test participants
+      // just need the session cookie set — the extension takes it from here.
+      router.push(data.type === "consumer" ? "/" : "/dashboard/projects");
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {

@@ -5,7 +5,21 @@ import { getSessionUser } from "@/lib/auth/session";
 
 // GET /api/extension/resolve?domain=suvria.com
 // Reads the lessmissed_session cookie (= MongoDB userId) and finds the project
-// belonging to that user whose domain matches the requested domain.
+// whose domain matches the requested domain.
+//
+// Any authenticated user can contribute session data to any project — the
+// consumer_id in the returned payload is the current user, so the session is
+// still attributed to the person actually browsing. The project the data
+// lands in is the brand's canonical project for that domain, not necessarily
+// one the browsing user created. This is what makes crowd-contributed data
+// possible: a visitor to suvria.com doesn't need to own the suvria.com
+// project to feed it session data.
+//
+// When multiple projects exist for the same domain (multi-tenant setups, a
+// user who cloned another user's config), we prefer the current user's own
+// project so a self-serve brand keeps landing in their own workspace, then
+// fall back to the oldest matching project — typically the brand's canonical
+// one, since a canonical setup precedes clones and forks.
 export async function GET(request) {
   try {
     const user = await getSessionUser();
@@ -22,16 +36,31 @@ export async function GET(request) {
 
     // Normalise: strip www. so "www.suvria.com" matches a project stored as "suvria.com"
     const domain = rawDomain.replace(/^www\./, "");
+    const domainMatch = { $in: [domain, `www.${domain}`] };
 
     await connectDB();
 
-    // Try exact match first, then www. variant
-    const project = await Project.findOne({
+    // Prefer the browsing user's own project (self-serve setups keep their
+    // data in their own workspace), then fall back to any project for that
+    // domain. Two-step because a single $or with a $sort could rank an older
+    // stranger's project above the current user's newer one — which would
+    // silently move a self-serve brand's own data out of their workspace.
+    let project = await Project.findOne({
       client_id: user.userId,
-      domain: { $in: [domain, `www.${domain}`] },
+      domain: domainMatch,
     })
       .select("_id name domain pages")
       .lean();
+
+    if (!project) {
+      project = await Project.findOne({
+        domain: domainMatch,
+        status: { $ne: "archived" },
+      })
+        .sort({ created_at: 1 })
+        .select("_id name domain pages")
+        .lean();
+    }
 
     if (!project) {
       return NextResponse.json({ error: "No project found for this domain" }, { status: 404 });

@@ -19,7 +19,9 @@ export async function POST(request) {
     return NextResponse.json({ error: "email and password are required" }, { status: 400 });
   }
 
-  const user = await User.findOne({ email: email.toLowerCase(), type: "client" }).lean();
+  // Both roles use the same login endpoint. Clients land on the dashboard;
+  // consumers land on the customer landing page (see LoginForm routing).
+  const user = await User.findOne({ email: email.toLowerCase() }).lean();
   if (!user) {
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
   }
@@ -33,7 +35,12 @@ export async function POST(request) {
 
   await User.updateOne({ _id: user._id }, { $set: { last_login: new Date() } });
 
-  const response = NextResponse.json({ ok: true, userId: user._id.toString(), name: user.name });
+  const response = NextResponse.json({
+    ok: true,
+    userId: user._id.toString(),
+    name: user.name,
+    type: user.type,
+  });
   response.cookies.set(SESSION_COOKIE, user._id.toString(), {
     path: "/",
     httpOnly: true,
