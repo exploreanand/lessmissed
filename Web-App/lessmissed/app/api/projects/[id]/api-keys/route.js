@@ -38,8 +38,8 @@ export async function POST(request, { params }) {
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   const { id } = await params;
-  const project = await getOwnedProject(id, user);
-  if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const owned = await getOwnedProject(id, user);
+  if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let body = {};
   try {
@@ -50,37 +50,42 @@ export async function POST(request, { params }) {
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 60) : null;
 
   const key = generateApiKey();
-  const now = new Date();
 
-  const result = await Project.findByIdAndUpdate(
-    project._id,
-    {
-      $push: {
-        api_keys: {
-          key,
-          name,
-          created_at: now,
-          last_used_at: null,
-          revoked_at: null,
-        },
+  try {
+    // Load the hydrated doc so pushing into api_keys runs the subdoc's
+    // default _id generator — findByIdAndUpdate with $push skips schema
+    // defaults on the pushed subdoc, which meant the created row had no _id
+    // and my old projection trick returned nothing.
+    const project = await Project.findById(owned._id);
+    if (!project) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    project.api_keys.push({
+      key,
+      name,
+      created_at: new Date(),
+      last_used_at: null,
+      revoked_at: null,
+    });
+    await project.save();
+
+    const created = project.api_keys[project.api_keys.length - 1];
+    return NextResponse.json(
+      {
+        _id: created._id.toString(),
+        key: created.key,
+        name: created.name,
+        created_at: created.created_at,
+        last_used_at: created.last_used_at,
       },
-    },
-    { new: true, projection: { api_keys: { $slice: -1 } } }
-  ).lean();
-
-  const created = result?.api_keys?.[0];
-  if (!created) {
-    return NextResponse.json({ error: "Failed to create key" }, { status: 500 });
+      { status: 201 }
+    );
+  } catch (err) {
+    console.error("[api-keys POST] failed:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Failed to create key" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json(
-    {
-      _id: created._id.toString(),
-      key: created.key,
-      name: created.name,
-      created_at: created.created_at,
-      last_used_at: created.last_used_at,
-    },
-    { status: 201 }
-  );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 // A single card the brand paste-installs on their site. Keys are minted from
 // this tab because it's the one place where the brand is ready to instrument:
@@ -52,6 +52,71 @@ function CopyButton({ value, label = "Copy" }) {
   );
 }
 
+// Status pill telling the brand whether their tag is actually posting. Reads
+// the most recent last_used_at across all live keys — a fresh timestamp
+// means the tag is running SOMEWHERE (the origin check on the server
+// guarantees that "somewhere" is under the project's domain), so the pill is
+// the honest answer to "did I paste the snippet correctly and is it working".
+function StatusPill({ keys, tick /* eslint-disable-line no-unused-vars */ }) {
+  var mostRecent = null;
+  (keys ?? []).forEach(function (k) {
+    if (!k.last_used_at) return;
+    var t = new Date(k.last_used_at).getTime();
+    if (mostRecent == null || t > mostRecent) mostRecent = t;
+  });
+
+  const now = Date.now();
+  const ageMs = mostRecent == null ? null : now - mostRecent;
+
+  let state; let label; let tone; let dot;
+  if (ageMs == null) {
+    state = "waiting";
+    label = "Waiting for first event";
+    tone = "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700";
+    dot = "bg-zinc-400";
+  } else if (ageMs < 30_000) {
+    state = "live";
+    label = "Live · event just now";
+    tone = "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800";
+    dot = "bg-emerald-500 animate-pulse";
+  } else if (ageMs < 60 * 60_000) {
+    state = "recent";
+    label = "Recent · last event " + formatAge(ageMs) + " ago";
+    tone = "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800";
+    dot = "bg-emerald-500";
+  } else if (ageMs < 24 * 60 * 60_000) {
+    state = "idle";
+    label = "Idle · last event " + formatAge(ageMs) + " ago";
+    tone = "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800";
+    dot = "bg-amber-500";
+  } else {
+    state = "stale";
+    label = "No recent traffic · last " + formatAge(ageMs) + " ago";
+    tone = "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700";
+    dot = "bg-zinc-400";
+  }
+
+  return (
+    <span
+      title={state === "live" ? "The tag is posting events right now" : label}
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {label}
+    </span>
+  );
+}
+
+function formatAge(ms) {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h";
+  return Math.floor(h / 24) + "d";
+}
+
 function KeyRow({ k, onRevoke }) {
   const [revealed, setRevealed] = useState(false);
   const shown = revealed ? k.key : `${k.key.slice(0, 6)}${"•".repeat(20)}${k.key.slice(-4)}`;
@@ -92,14 +157,43 @@ export default function InstallTab({ projectId, domain }) {
   const [keys, setKeys] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Re-render every second so the "N seconds ago" label updates in place
+  // without waiting for the next poll.
+  const [tick, setTick] = useState(0);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/projects/${projectId}/api-keys`, {
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error("fetch failed");
+      const d = await r.json();
+      setKeys(d.keys ?? []);
+      setError("");
+    } catch {
+      // Keep whatever we last had rather than blanking the UI on a hiccup.
+      if (keys === null) setError("Could not load your keys.");
+    }
+  }, [projectId, keys]);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/projects/${projectId}/api-keys`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-      .then((d) => { if (!cancelled) setKeys(d.keys ?? []); })
-      .catch(() => { if (!cancelled) setError("Could not load your keys."); });
-    return () => { cancelled = true; };
+    refresh();
+    // Poll every 5s so the "Live" indicator flips within a few seconds of
+    // the tag's first event landing. Stopping on tab hide keeps this off
+    // the network when the brand is on another tab.
+    const iv = setInterval(() => {
+      if (!cancelled && !document.hidden) refresh();
+    }, 5000);
+    const clockIv = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      clearInterval(clockIv);
+    };
+    // refresh is stable-enough — its `keys` dependency would restart the
+    // interval on every load, but we want the interval running steadily.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   async function mintKey(name) {
@@ -160,6 +254,18 @@ export default function InstallTab({ projectId, domain }) {
 
   return (
     <div className="space-y-6">
+      {/* Live install status */}
+      <div className="flex items-center justify-between gap-3">
+        <StatusPill keys={keys} tick={tick} />
+        <button
+          type="button"
+          onClick={refresh}
+          className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+        >
+          Refresh now
+        </button>
+      </div>
+
       {/* Install snippet */}
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
         <div className="flex items-baseline justify-between mb-4">
