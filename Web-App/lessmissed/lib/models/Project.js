@@ -138,17 +138,40 @@ const pageSchema = new mongoose.Schema(
   { _id: true }
 );
 
+// Publishable-style keys the brand embeds in a <script data-lm-key="pk_..."> tag
+// on their site. Rotatable and revocable per key; multiple can be live at once
+// so a rotation doesn't take the tag offline. Stored plaintext because the
+// key is client-side by design (same as a Stripe publishable key) — the
+// security boundary is the origin check in lib/auth/apiKey.js, not the key's
+// secrecy.
+const apiKeySchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    name: { type: String, default: null },
+    created_at: { type: Date, default: Date.now },
+    last_used_at: { type: Date, default: null },
+    revoked_at: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
 const projectSchema = new mongoose.Schema(
   {
     client_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     name: { type: String, required: true },
     domain: { type: String, required: true },
     pages: [pageSchema],
+    api_keys: { type: [apiKeySchema], default: [] },
     health_score: { type: Number, default: 0 },
     total_sessions: { type: Number, default: 0 },
     status: { type: String, enum: ["active", "paused", "archived"], default: "active" },
   },
   { timestamps: { createdAt: "created_at", updatedAt: "updated_at" } }
 );
+
+// Sparse-safe uniqueness on live keys — a revoked key still exists in the
+// history but must not collide with a freshly issued one. Indexed on the key
+// string itself so the tag-side lookup by X-Lessmissed-Key is O(log n).
+projectSchema.index({ "api_keys.key": 1 }, { unique: true, sparse: true });
 
 export default mongoose.models.Project || mongoose.model("Project", projectSchema);
