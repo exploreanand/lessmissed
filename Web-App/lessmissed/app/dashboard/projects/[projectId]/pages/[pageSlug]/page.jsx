@@ -4,11 +4,30 @@ import Session from "@/lib/models/Session";
 import Fixation from "@/lib/models/Fixation";
 import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
+import { computeScanPath } from "@/lib/insights/scanPath";
+import { computeAttentionDropOff } from "@/lib/insights/attentionDropOff";
+import { computeBacktracking } from "@/lib/insights/backtracking";
+import { computeScrollDepth } from "@/lib/insights/scrollDepth";
+import { computeScrollVelocity } from "@/lib/insights/scrollVelocity";
+import { computeScrollBack } from "@/lib/insights/scrollBack";
+import { computeFoldAwareness } from "@/lib/insights/foldAwareness";
+import { computeRageClicks } from "@/lib/insights/rageClicks";
+import { computeDeadClicks } from "@/lib/insights/deadClicks";
+import { computeLastClickBeforeExit } from "@/lib/insights/lastClickBeforeExit";
 import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import { pageMatchFilter } from "@/lib/pathTemplate";
 import HeatmapViewer from "./HeatmapViewer";
 import InsightCatalog from "./InsightCatalog";
+
+function medianOf(arr) {
+  if (!arr.length) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+    : sorted[mid];
+}
 
 export default async function PageDetailPage({ params }) {
   const { projectId, pageSlug } = await params;
@@ -37,21 +56,8 @@ export default async function PageDetailPage({ params }) {
       ? Math.round(sessions.reduce((a, s) => a + (s.engagement_score ?? 0), 0) / totalSessions)
       : 0;
 
-  const scrollDepths = sessions.map((s) => s.summary?.max_scroll_depth_percent ?? 0);
-  const avgScrollDepth =
-    totalSessions > 0
-      ? Math.round(scrollDepths.reduce((a, b) => a + b, 0) / totalSessions)
-      : 0;
-
-  const scrollReach = {
-    25:  Math.round((scrollDepths.filter((d) => d >= 25).length  / Math.max(1, totalSessions)) * 100),
-    50:  Math.round((scrollDepths.filter((d) => d >= 50).length  / Math.max(1, totalSessions)) * 100),
-    75:  Math.round((scrollDepths.filter((d) => d >= 75).length  / Math.max(1, totalSessions)) * 100),
-    100: Math.round((scrollDepths.filter((d) => d >= 100).length / Math.max(1, totalSessions)) * 100),
-  };
-
   // Element-level data from fixations + clicks for this page's exact path
-  const [fixationAgg, clickAgg, firstFixation] = await Promise.all([
+  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit] = await Promise.all([
     // Group by screenshot region, falling back to the raw selector for
     // fixations derived before the page was labelled. Grouping by region is
     // what separates components that share one selector — on a commerce page a
@@ -67,6 +73,9 @@ export default async function PageDetailPage({ params }) {
           _id: { $ifNull: ["$region_id", { $ifNull: ["$element_key", "$element_id"] }] },
           fixation_count: { $sum: 1 },
           total_dwell_ms: { $sum: "$duration_ms" },
+          // INS-G05 needs per-fixation durations to compute the median. $sum
+          // alone can't do it, and Mongo $percentile is 7.0+ only.
+          durations: { $push: "$duration_ms" },
           session_ids: { $addToSet: "$session_id" },
           element_id: { $first: "$element_id" },
           element_tag: { $first: "$element_tag" },
@@ -96,6 +105,26 @@ export default async function PageDetailPage({ params }) {
     ]),
     // INS-G04: first 200ms+ fixation per session, aggregated into first-look regions
     computeFirstFixation(project, page),
+    // INS-G06: ordered scan path across sessions — top transitions and modal opening
+    computeScanPath(project, page),
+    // INS-G08: vertical attention drop-off point and the scroll-vs-look gap
+    computeAttentionDropOff(project, page),
+    // INS-G07: revisits per element — sessions that returned to an element after moving away
+    computeBacktracking(project, page),
+    // INS-S01: max scroll depth per session — avg/median headline, quartile reach, decile distribution
+    computeScrollDepth(project, page),
+    // INS-S02: per-decile scroll velocity — skim vs read classification
+    computeScrollVelocity(project, page),
+    // INS-S03: scroll-back events attributed to the destination decile
+    computeScrollBack(project, page),
+    // INS-S04: element-level net visibility — scroll reach × fixation, below the fold
+    computeFoldAwareness(project, page),
+    // INS-C02: rage-click bursts attributed to the clicked element
+    computeRageClicks(project, page),
+    // INS-C03: dead clicks — clicks on non-interactive elements
+    computeDeadClicks(project, page),
+    // INS-C04: last click on this page for sessions that exited here without completing the task
+    computeLastClickBeforeExit(project, page),
   ]);
 
   const clickMap = {};
@@ -128,6 +157,7 @@ export default async function PageDetailPage({ params }) {
         fixation_count: f.fixation_count,
         total_dwell_ms: f.total_dwell_ms,
         avg_dwell_ms: Math.round(f.total_dwell_ms / f.fixation_count),
+        median_dwell_ms: medianOf(f.durations ?? []),
         click_count: clicks.click_count,
         sessions_with_fixation: sessionsWithFixation,
         sessions_with_click: sessionsWithClick,
@@ -154,11 +184,29 @@ export default async function PageDetailPage({ params }) {
   const insights = {
     total_sessions: totalSessions,
     avg_engagement_score: avgEngagementScore,
-    avg_scroll_depth_pct: avgScrollDepth,
-    scroll_reach: scrollReach,
     avg_dwell_ms: avgDwellMs,
     // INS-G04
     first_fixation: firstFixation,
+    // INS-G06
+    scan_path: scanPath,
+    // INS-G07
+    backtracking,
+    // INS-G08
+    attention_drop_off: attentionDropOff,
+    // INS-S01
+    scroll_depth: scrollDepth,
+    // INS-S02
+    scroll_velocity: scrollVelocity,
+    // INS-S03
+    scroll_back: scrollBack,
+    // INS-S04
+    fold_awareness: foldAwareness,
+    // INS-C02
+    rage_clicks: rageClicks,
+    // INS-C03
+    dead_clicks: deadClicks,
+    // INS-C04
+    last_click_before_exit: lastClickBeforeExit,
     looked_not_clicked: lookedNotClicked,
     total_unique_elements_seen: fixationAgg.length,
     total_rage_clicks:   sessions.reduce((a, s) => a + (s.summary?.rage_clicks    ?? 0), 0),
