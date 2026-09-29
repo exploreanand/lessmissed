@@ -14,6 +14,7 @@ import { computeFoldAwareness } from "@/lib/insights/foldAwareness";
 import { computeRageClicks } from "@/lib/insights/rageClicks";
 import { computeDeadClicks } from "@/lib/insights/deadClicks";
 import { computeLastClickBeforeExit } from "@/lib/insights/lastClickBeforeExit";
+import { computeClickedWithoutLooking } from "@/lib/insights/clickedWithoutLooking";
 import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import { pageMatchFilter } from "@/lib/pathTemplate";
@@ -57,7 +58,7 @@ export default async function PageDetailPage({ params }) {
       : 0;
 
   // Element-level data from fixations + clicks for this page's exact path
-  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit] = await Promise.all([
+  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit, clickedWithoutLooking] = await Promise.all([
     // Group by screenshot region, falling back to the raw selector for
     // fixations derived before the page was labelled. Grouping by region is
     // what separates components that share one selector — on a commerce page a
@@ -125,6 +126,8 @@ export default async function PageDetailPage({ params }) {
     computeDeadClicks(project, page),
     // INS-C04: last click on this page for sessions that exited here without completing the task
     computeLastClickBeforeExit(project, page),
+    // INS-GC02: muscle-memory clicks — clicks on elements with no prior fixation in the session
+    computeClickedWithoutLooking(project, page),
   ]);
 
   const clickMap = {};
@@ -207,6 +210,8 @@ export default async function PageDetailPage({ params }) {
     dead_clicks: deadClicks,
     // INS-C04
     last_click_before_exit: lastClickBeforeExit,
+    // INS-GC02
+    clicked_without_looking: clickedWithoutLooking,
     looked_not_clicked: lookedNotClicked,
     total_unique_elements_seen: fixationAgg.length,
     total_rage_clicks:   sessions.reduce((a, s) => a + (s.summary?.rage_clicks    ?? 0), 0),

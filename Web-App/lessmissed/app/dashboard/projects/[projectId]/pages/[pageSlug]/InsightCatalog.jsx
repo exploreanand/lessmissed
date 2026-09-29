@@ -46,7 +46,7 @@ const ALL_INSIGHTS = {
   ],
   gaze_click: [
     { id: "INS-GC01", name: "Looked But Didn't Click",   phase: 1, primary: true, desc: "Elements with fixation > 0 but click == 0. Problem is persuasion, not visibility." },
-    { id: "INS-GC02", name: "Clicked Without Looking",    phase: 2, desc: "Click without preceding 200ms fixation. Muscle memory click — label copy doesn't matter for this element." },
+    { id: "INS-GC02", name: "Clicked Without Looking",    phase: 1, desc: "Click without preceding 200ms fixation. Muscle memory click — label copy doesn't matter for this element." },
     { id: "INS-GC03", name: "Hesitation Time",            phase: 2, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
     { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 2, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
     { id: "INS-GC05", name: "Distraction Mapping",        phase: 2, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
@@ -1438,6 +1438,97 @@ function ClickHeatmapCard({ ins, catId, elements }) {
   );
 }
 
+function ClickedWithoutLookingCard({ ins, catId, insights }) {
+  // INS-GC02: clicks with no prior ≥200ms fixation on the same element in the
+  // session — the muscle-memory click. The insight for a brand is precisely
+  // that: on these elements label copy is not the lever, because users didn't
+  // read it before deciding.
+  const cwl = insights.clicked_without_looking;
+
+  if (!cwl || cwl.total_clicks === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <p className="text-xs text-zinc-400">No clicks on this page yet.</p>
+      </LiveCard>
+    );
+  }
+
+  const top = cwl.top_elements ?? [];
+  const maxPct = top[0]?.pct_sessions ?? 1;
+
+  return (
+    <LiveCard ins={ins} catId={catId}>
+      <div className="flex gap-6">
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cwl.pct_cwl_of_all_clicks}%
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            of clicks had no prior fixation
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cwl.pct_sessions_with_cwl}%
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            of sessions clicked without looking
+          </p>
+        </div>
+      </div>
+
+      {top.length > 0 ? (
+        <div className="space-y-2.5">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Muscle-memory targets · copy won't change behavior here
+          </p>
+          {top.map((el) => (
+            <div key={el.key ?? el.element_id}>
+              <div className="flex justify-between mb-1 gap-2">
+                <span
+                  title={el.element_id}
+                  className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[180px]"
+                >
+                  {el.label ?? el.element_id}
+                  {el.element_tag && (
+                    <span className="text-zinc-400 font-normal">
+                      {" "}
+                      · &lt;{el.element_tag}&gt;
+                    </span>
+                  )}
+                </span>
+                <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 ml-2 flex-shrink-0 tabular-nums">
+                  {el.pct_sessions}%
+                  {el.click_count > el.sessions_with_cwl && (
+                    <span className="text-zinc-400 font-normal">
+                      {" "}
+                      · {el.click_count} clicks
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${S[catId].bar}`}
+                  style={{ width: `${Math.round((el.pct_sessions / maxPct) * 100)}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-400">
+          Muscle-memory clicks fired, but no single element hit the ≥2-session ranking threshold.
+        </p>
+      )}
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        No prior ≥200ms fixation on the element in the same session
+      </p>
+    </LiveCard>
+  );
+}
+
 function LookedButDidntClickCard({ ins, catId, insights }) {
   const items = (insights.looked_not_clicked ?? []).slice(0, 3);
 
@@ -1584,6 +1675,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-C03":  return <DeadClicksCard         ins={ins} catId={catId} insights={insights} />;
     case "INS-C04":  return <LastClickBeforeExitCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC01": return <LookedButDidntClickCard ins={ins} catId={catId} insights={insights} />;
+    case "INS-GC02": return <ClickedWithoutLookingCard ins={ins} catId={catId} insights={insights} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;
