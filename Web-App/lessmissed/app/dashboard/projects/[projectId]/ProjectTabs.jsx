@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import HealthBadge from "../../../components/dashboard/HealthBadge";
 import TargetPages from "./TargetPages";
+import InstallTab from "./InstallTab";
 
 function timeAgo(iso) {
   if (!iso) return "—";
@@ -198,7 +199,7 @@ function FlowTab({ projectId }) {
 export default function ProjectTabs({ projectId, domain, sessions }) {
   const [tab, setTab] = useState("pages");
 
-  const tabs = ["pages", "sessions", "flow"];
+  const tabs = ["pages", "sessions", "flow", "install"];
 
   return (
     <div>
@@ -267,6 +268,9 @@ export default function ProjectTabs({ projectId, domain, sessions }) {
 
       {/* User Flow tab */}
       {tab === "flow" && <FlowTab projectId={projectId} />}
+
+      {/* Install tab — API keys + head-script snippet */}
+      {tab === "install" && <InstallTab projectId={projectId} domain={domain} />}
     </div>
   );
 }

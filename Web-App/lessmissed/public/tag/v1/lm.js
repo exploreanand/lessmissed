@@ -542,6 +542,40 @@
   var gazeEnabled = true; // may be flipped off by disableGaze()
   var webgazerReady = false;
 
+  // WebGazer's begin() fetches its face-detection models from tfhub.dev, which
+  // now 302s to a signed Kaggle URL that expires in three hours — so every
+  // page load is a fresh ~6 MB download, and any failure silently kills gaze
+  // for that page. The extension takes the same models out of the network
+  // path by rewriting these URLs onto its bundle; we do the same, pointing
+  // them at /tag/v1/models/ on our own origin. See contentScript.ts:380.
+  var TFHUB_MODEL_MAP = [
+    [/tfhub\.dev\/tensorflow\/tfjs-model\/blazeface\//i, 'blazeface'],
+    [/tfhub\.dev\/mediapipe\/tfjs-model\/facemesh\//i, 'facemesh'],
+    [/tfhub\.dev\/mediapipe\/tfjs-model\/iris\//i, 'iris'],
+  ];
+  function localModelUrl(url) {
+    for (var i = 0; i < TFHUB_MODEL_MAP.length; i++) {
+      var pattern = TFHUB_MODEL_MAP[i][0];
+      var dir = TFHUB_MODEL_MAP[i][1];
+      if (!pattern.test(url)) continue;
+      var file = url.split('?')[0].split('/').pop();
+      if (!file) return null;
+      return API_BASE + '/tag/v1/models/' + dir + '/' + file;
+    }
+    return null;
+  }
+  var modelFetchPatched = false;
+  function patchModelFetch() {
+    if (modelFetchPatched) return;
+    modelFetchPatched = true;
+    var nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : (input && input.url);
+      var local = typeof url === 'string' ? localModelUrl(url) : null;
+      return local ? nativeFetch(local, init) : nativeFetch(input, init);
+    };
+  }
+
   function loadWebGazer() {
     return new Promise(function (resolve, reject) {
       if (window.webgazer) return resolve(window.webgazer);
@@ -558,6 +592,9 @@
 
   function initWebGazer() {
     if (!gazeEnabled || webgazerReady) return;
+    // Patch fetch BEFORE webgazer's script loads — begin() may fire model
+    // requests almost immediately after script parse depending on the build.
+    patchModelFetch();
     loadWebGazer()
       .then(function (webgazer) {
         try {
