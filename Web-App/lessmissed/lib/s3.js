@@ -1,12 +1,12 @@
 import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 
-const s3 = new S3Client({
-  region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
+// No explicit credentials: let the AWS SDK's default provider chain resolve
+// them. Locally that picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from
+// .env.local; in production it uses whatever the task is given — the ECS task
+// role, or (because the prod screenshots bucket lives in a separate AWS
+// account) our own IAM keys for that account passed in as env. Either way the
+// code stays the same.
+const s3 = new S3Client({ region: process.env.AWS_REGION });
 
 export async function uploadToS3(buffer, key, contentType = "image/jpeg") {
   await s3.send(

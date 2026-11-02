@@ -1,11 +1,5 @@
 import mongoose from "mongoose";
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  throw new Error("Please define MONGODB_URI in .env.local");
-}
-
 // Cache the connection across hot-reloads in Next.js dev mode
 let cached = global._mongoose;
 if (!cached) {
@@ -34,6 +28,14 @@ async function ensureTimeseriesCollection(db) {
 
 export async function connectDB() {
   if (cached.conn) return cached.conn;
+
+  // Read at call time, not import time: `next build` imports every route
+  // module with no env set, and throwing here would fail the production build
+  // (and the Docker image build) before a single request is ever served.
+  const MONGODB_URI = process.env.MONGODB_URI;
+  if (!MONGODB_URI) {
+    throw new Error("Please define MONGODB_URI in .env.local");
+  }
 
   if (!cached.promise) {
     cached.promise = mongoose
