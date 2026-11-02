@@ -1,0 +1,15 @@
+# Build context: Web-App/lessmissed/
+node_modules
+.next
+out
+
+# Never bake secrets into an image. .env.local holds the live Atlas URI and
+# AWS keys — it must never reach the build context.
+.env
+.env.*
+
+# Not needed at build or runtime
+.git
+*.md
+scripts
+.DS_Store

@@ -1,0 +1,25 @@
+# Repo-root build context (used by capture-service/Dockerfile).
+# node_modules everywhere — including capture-service/node_modules, which is a
+# symlink into the web app and must never be copied into the image.
+**/node_modules
+
+# Never bake secrets into an image.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build output and VCS/tooling
+**/.next
+Web-App/lessmissed/out
+.git
+.github
+.claude
+.code-review-graph
+Claude outputs/
+**/.DS_Store
+
+# Not needed by the capture worker
+lessmissed_extension
+evaluation
+label-service
+**/*.md
