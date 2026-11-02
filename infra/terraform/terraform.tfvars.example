@@ -17,9 +17,12 @@ s3_cross_account_role_arn = "arn:aws:iam::OTHER_ACCOUNT_ID:role/lessmissed-scree
 # atlas_peering_connection_id = "pcx-0123456789abcdef0"
 # atlas_cidr                  = "192.168.248.0/21"
 
+# The .in redirect is off by default (domain not owned). Set this ONLY after
+# buying lessmissed.in — it stands up the cert, CloudFront distro, WAF and DNS.
+# in_domain = "lessmissed.in"
+
 # Overridable defaults (usually leave):
 # project     = "lessmissed"
 # region      = "ap-south-1"
 # root_domain = "lessmissed.com"
-# in_domain   = "lessmissed.in"
 # github_repo = "exploreanand/lessmissed"

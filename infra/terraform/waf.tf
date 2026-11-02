@@ -149,6 +149,7 @@ resource "aws_wafv2_web_acl" "app" {
 
 # Minimal ACL for the .in redirect distribution (required by the pricing plan).
 resource "aws_wafv2_web_acl" "in" {
+  count       = local.in_enabled ? 1 : 0
   provider    = aws.us_east_1
   name        = "${local.name}-in"
   description = "Redirect distribution"

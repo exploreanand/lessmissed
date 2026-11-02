@@ -37,6 +37,7 @@ resource "aws_cloudfront_function" "www_redirect" {
 
 # Any lessmissed.in request -> https://lessmissed.com<path> (301).
 resource "aws_cloudfront_function" "in_redirect" {
+  count   = local.in_enabled ? 1 : 0
   name    = "${local.name}-in-redirect"
   runtime = "cloudfront-js-2.0"
   publish = true
@@ -146,12 +147,13 @@ resource "aws_cloudfront_distribution" "app" {
 # the viewer-request function returns a 301 first — but a distribution must
 # declare one, so it points at the same ALB origin.
 resource "aws_cloudfront_distribution" "in_redirect" {
+  count           = local.in_enabled ? 1 : 0
   enabled         = true
   is_ipv6_enabled = true
   aliases         = [local.in_apex, local.in_www]
   comment         = "${local.name} .in redirect"
   price_class     = "PriceClass_All"
-  web_acl_id      = aws_wafv2_web_acl.in.arn
+  web_acl_id      = aws_wafv2_web_acl.in[0].arn
 
   origin {
     domain_name = local.origin_domain
@@ -173,7 +175,7 @@ resource "aws_cloudfront_distribution" "in_redirect" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.in_redirect.arn
+      function_arn = aws_cloudfront_function.in_redirect[0].arn
     }
   }
 
@@ -184,7 +186,7 @@ resource "aws_cloudfront_distribution" "in_redirect" {
   }
 
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate_validation.in.certificate_arn
+    acm_certificate_arn      = aws_acm_certificate_validation.in[0].certificate_arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }

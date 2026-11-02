@@ -13,13 +13,13 @@ variable "region" {
 variable "root_domain" {
   type        = string
   default     = "lessmissed.com"
-  description = "Primary domain. Its Route 53 hosted zone must already exist."
+  description = "Primary domain. Terraform creates its Route 53 hosted zone; delegate the registrar's nameservers to it."
 }
 
 variable "in_domain" {
   type        = string
-  default     = "lessmissed.in"
-  description = "Secondary domain that 301-redirects to root_domain. Its zone must already exist."
+  default     = ""
+  description = "Secondary domain that 301-redirects to root_domain. Leave empty if not owned; set it (e.g. lessmissed.in) once bought to stand up the redirect. Terraform creates its hosted zone too."
 }
 
 # --- Networking -------------------------------------------------------------

@@ -31,12 +31,13 @@ output "cloudfront_app_domain" {
 }
 
 output "cloudfront_in_domain" {
-  value = aws_cloudfront_distribution.in_redirect.domain_name
+  value       = local.in_enabled ? aws_cloudfront_distribution.in_redirect[0].domain_name : null
+  description = "Null until in_domain is set."
 }
 
 output "root_zone_nameservers" {
-  value       = data.aws_route53_zone.root.name_servers
-  description = "Route 53 nameservers for the root domain."
+  value       = aws_route53_zone.root.name_servers
+  description = "Set these 4 as the nameservers at your registrar (GoDaddy) for lessmissed.com."
 }
 
 output "github_deploy_role_arn" {
