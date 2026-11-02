@@ -14,9 +14,29 @@ import {
   ListObjectsV2Command,
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
+import { fromTemporaryCredentials } from "@aws-sdk/credential-providers";
 import { config } from "./config.js";
 
-const s3 = new S3Client({ region: config.s3.region });
+// The production screenshots bucket lives in a SEPARATE AWS account. When
+// AWS_S3_ROLE_ARN is set, assume that account's cross-account role (sourced
+// from the ECS task role via the default chain); otherwise fall back to the
+// default chain for local dev. Mirrors Web-App/lessmissed/lib/s3.js.
+function makeS3Client() {
+  const region = config.s3.region;
+  const roleArn = process.env.AWS_S3_ROLE_ARN;
+  if (roleArn) {
+    return new S3Client({
+      region,
+      credentials: fromTemporaryCredentials({
+        params: { RoleArn: roleArn, RoleSessionName: "lessmissed-capture" },
+        clientConfig: { region },
+      }),
+    });
+  }
+  return new S3Client({ region });
+}
+
+const s3 = makeS3Client();
 
 /** screenshots/{projectId}/{pageId}/{captureId}[.thumb].jpg */
 export function captureKey(projectId, pageId, captureId, variant = "full") {
