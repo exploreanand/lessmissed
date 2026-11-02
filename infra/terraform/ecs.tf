@@ -33,6 +33,12 @@ locals {
     { name = "AWS_S3_ROLE_ARN", value = var.s3_cross_account_role_arn },
     { name = "NODE_ENV", value = "production" },
   ]
+
+  # When S3 access uses keys (not a cross-account role), inject them so the
+  # SDK's default credential chain picks them up. AWS_S3_ROLE_ARN stays empty,
+  # so lib/s3.js / store.js fall back to the default chain.
+  s3_key_env    = var.s3_access_key_id != "" ? [{ name = "AWS_ACCESS_KEY_ID", value = var.s3_access_key_id }] : []
+  s3_key_secret = var.s3_access_key_id != "" ? [{ name = "AWS_SECRET_ACCESS_KEY", valueFrom = aws_secretsmanager_secret.s3_key.arn }] : []
 }
 
 # --- Web task definition ----------------------------------------------------
@@ -58,14 +64,14 @@ resource "aws_ecs_task_definition" "web" {
       containerPort = 3000
       protocol      = "tcp"
     }]
-    environment = concat(local.common_aws_env, [
+    environment = concat(local.common_aws_env, local.s3_key_env, [
       { name = "PORT", value = "3000" },
       { name = "HOSTNAME", value = "0.0.0.0" },
       { name = "EVENTS_TTL_DAYS", value = tostring(var.events_ttl_days) },
     ])
-    secrets = [
+    secrets = concat([
       { name = "MONGODB_URI", valueFrom = aws_secretsmanager_secret.mongo_web.arn },
-    ]
+    ], local.s3_key_secret)
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -97,12 +103,12 @@ resource "aws_ecs_task_definition" "capture" {
     image       = local.capture_image
     essential   = true
     stopTimeout = 60
-    environment = concat(local.common_aws_env, [
+    environment = concat(local.common_aws_env, local.s3_key_env, [
       { name = "CAPTURE_CONCURRENCY", value = "3" },
     ])
-    secrets = [
+    secrets = concat([
       { name = "MONGODB_URI", valueFrom = aws_secretsmanager_secret.mongo_capture.arn },
-    ]
+    ], local.s3_key_secret)
     logConfiguration = {
       logDriver = "awslogs"
       options = {

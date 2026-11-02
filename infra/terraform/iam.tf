@@ -32,7 +32,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = [aws_secretsmanager_secret.mongo_web.arn, aws_secretsmanager_secret.mongo_capture.arn]
+      Resource = [aws_secretsmanager_secret.mongo_web.arn, aws_secretsmanager_secret.mongo_capture.arn, aws_secretsmanager_secret.s3_key.arn]
     }]
   })
 }
@@ -52,11 +52,15 @@ data "aws_iam_policy_document" "task_assume" {
 # Lets the app code assume the cross-account role that fronts the screenshots
 # bucket, and lets `aws ecs execute-command` open a shell into a task.
 data "aws_iam_policy_document" "task_shared" {
-  statement {
-    sid       = "AssumeScreenshotsRole"
-    effect    = "Allow"
-    actions   = ["sts:AssumeRole"]
-    resources = [var.s3_cross_account_role_arn]
+  # Only present when using the cross-account role (empty when using access keys).
+  dynamic "statement" {
+    for_each = var.s3_cross_account_role_arn != "" ? [1] : []
+    content {
+      sid       = "AssumeScreenshotsRole"
+      effect    = "Allow"
+      actions   = ["sts:AssumeRole"]
+      resources = [var.s3_cross_account_role_arn]
+    }
   }
   statement {
     sid    = "EcsExec"

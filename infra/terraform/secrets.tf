@@ -12,3 +12,11 @@ resource "aws_secretsmanager_secret" "mongo_capture" {
   description             = "MongoDB Atlas connection string for the capture worker (lm_capture user)."
   recovery_window_in_days = 7
 }
+
+# Secret access key for the screenshots bucket (lives in the store account).
+# Value set out of band via the CLI; only used when s3_access_key_id is set.
+resource "aws_secretsmanager_secret" "s3_key" {
+  name                    = "${local.name}/prod/s3-secret-key"
+  description             = "AWS secret access key for the cross-account screenshots bucket."
+  recovery_window_in_days = 7
+}

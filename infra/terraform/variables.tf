@@ -108,7 +108,14 @@ variable "s3_base_url" {
 
 variable "s3_cross_account_role_arn" {
   type        = string
-  description = "ARN of the role in the screenshots-prod account that the ECS task roles assume for S3 access. The tasks get sts:AssumeRole on this; the role + bucket policy are created in that other account (see DEPLOYMENT.md)."
+  default     = ""
+  description = "ARN of the role in the screenshots-prod account that the ECS task roles assume for S3 access. Leave empty when using access keys (s3_access_key_id) instead. When set, tasks get sts:AssumeRole on it; the role + bucket policy are created in that other account (see DEPLOYMENT.md)."
+}
+
+variable "s3_access_key_id" {
+  type        = string
+  default     = ""
+  description = "Access key ID for the screenshots bucket (store account). When set, tasks authenticate to S3 with this key + the s3-secret-key secret instead of assuming s3_cross_account_role_arn. Mutually exclusive with it."
 }
 
 # --- CI / OIDC --------------------------------------------------------------
