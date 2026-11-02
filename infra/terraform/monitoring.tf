@@ -83,6 +83,21 @@ resource "aws_cloudwatch_metric_alarm" "capture_down" {
   }
 }
 
+# A CloudWatch alarm can only notify an SNS topic in its own region, and the
+# health-check alarm must live in us-east-1 (below), so it needs a us-east-1
+# topic. Same email, so you'll confirm a second subscription.
+resource "aws_sns_topic" "alarms_use1" {
+  provider = aws.us_east_1
+  name     = "${local.name}-alarms"
+}
+
+resource "aws_sns_topic_subscription" "alarms_use1_email" {
+  provider  = aws.us_east_1
+  topic_arn = aws_sns_topic.alarms_use1.arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
 # --- Route 53 health check on the public endpoint ---------------------------
 resource "aws_route53_health_check" "app" {
   fqdn              = local.apex_domain
@@ -106,7 +121,7 @@ resource "aws_cloudwatch_metric_alarm" "app_health" {
   statistic           = "Minimum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = [aws_sns_topic.alarms.arn]
+  alarm_actions       = [aws_sns_topic.alarms_use1.arn]
   dimensions = {
     HealthCheckId = aws_route53_health_check.app.id
   }
