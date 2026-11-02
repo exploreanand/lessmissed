@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+# Required (no defaults):
+alarm_email               = "ops@lessmissed.com"
+s3_base_url               = "https://lessmissed-screenshots-prod.s3.ap-south-1.amazonaws.com"
+s3_cross_account_role_arn = "arn:aws:iam::OTHER_ACCOUNT_ID:role/lessmissed-screenshots-writer"
+
+# First apply: leave these as-is (infra only, no running services).
+# create_services = false
+# image_tag       = "bootstrap"
+
+# After the first image push, re-apply with:
+# create_services = true
+# image_tag       = "<the commit SHA you pushed>"
+
+# After requesting VPC peering in the Atlas UI:
+# atlas_peering_connection_id = "pcx-0123456789abcdef0"
+# atlas_cidr                  = "192.168.248.0/21"
+
+# Overridable defaults (usually leave):
+# project     = "lessmissed"
+# region      = "ap-south-1"
+# root_domain = "lessmissed.com"
+# in_domain   = "lessmissed.in"
+# github_repo = "exploreanand/lessmissed"
