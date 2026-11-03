@@ -41,9 +41,23 @@ function firstOf(samples, key) {
   return null;
 }
 
+// Tag gaze events store the smoothed viewport coordinate as viewport_x/_y; the
+// older extension stream used x/y. Either way the absolute page position is the
+// viewport coordinate plus the scroll offset at sample time. Reading only x/y
+// here silently yielded NaN dispersion for every tag session, so no fixations
+// were ever derived from tag data.
+function absX(d) {
+  const b = d.viewport_x ?? d.x;
+  return b == null ? NaN : b + (d.scroll_x ?? 0);
+}
+function absY(d) {
+  const b = d.viewport_y ?? d.y;
+  return b == null ? NaN : b + (d.scroll_y ?? 0);
+}
+
 function buildFixation(samples, sessionId, projectId, pageUrl) {
-  const xs = samples.map((s) => s.data.x + (s.data.scroll_x ?? 0));
-  const ys = samples.map((s) => s.data.y + (s.data.scroll_y ?? 0));
+  const xs = samples.map((s) => absX(s.data));
+  const ys = samples.map((s) => absY(s.data));
   const elementIds = samples.map((s) => s.data.element_id).filter(Boolean);
   const elementId = mode(elementIds);
   const xpathSample = samples.find((s) => s.data.element_id === elementId);
@@ -92,7 +106,8 @@ export async function deriveFixations(sessionId, projectId) {
   const gazeEvents = await Event.find(
     { session_id: sessionId, type: "gaze" },
     {
-      "data.x": 1, "data.y": 1, "data.scroll_x": 1, "data.scroll_y": 1,
+      "data.x": 1, "data.y": 1, "data.viewport_x": 1, "data.viewport_y": 1,
+      "data.scroll_x": 1, "data.scroll_y": 1,
       "data.element_id": 1, "data.element_key": 1, "data.element_xpath": 1, "data.element_tag": 1,
       "data.element_text": 1, "data.element_alt": 1, "data.element_aria": 1,
       "data.element_src": 1, "data.element_rect": 1,
@@ -122,8 +137,8 @@ export async function deriveFixations(sessionId, projectId) {
 
     for (let i = 1; i < samples.length; i++) {
       const candidate = [...window, samples[i]];
-      const xs = candidate.map((s) => s.data.x + (s.data.scroll_x ?? 0));
-      const ys = candidate.map((s) => s.data.y + (s.data.scroll_y ?? 0));
+      const xs = candidate.map((s) => absX(s.data));
+      const ys = candidate.map((s) => absY(s.data));
       const dispersion =
         Math.max(...xs) - Math.min(...xs) + (Math.max(...ys) - Math.min(...ys));
       const gapMs =
