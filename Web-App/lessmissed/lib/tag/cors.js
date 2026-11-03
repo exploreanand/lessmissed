@@ -34,37 +34,26 @@ function corsHeaders(origin) {
   };
 }
 
-// Preflight handler. Two shapes:
-//   1. Origin missing or unparseable → return 204 without CORS headers. The
-//      browser will refuse the real request itself, no need for us to leak
-//      whether the key was valid.
-//   2. Origin present → look up the key and validate the origin. If both pass,
-//      echo the origin back; else return without CORS headers.
+// Preflight handler, exported by each tag route file as its OPTIONS handler.
 //
-// This handler is exported by each tag route file so Next.js registers it as
-// the OPTIONS handler for that route.
+// A preflight CANNOT be authenticated: the browser never sends our
+// X-Lessmissed-Key header on the OPTIONS request (custom headers only appear in
+// Access-Control-Request-Headers, they aren't actually sent), and the tag's
+// fetch() calls carry the key in that header, not the URL. So an earlier
+// version that looked the key up here always fell through to a bare 204 with no
+// CORS headers, and the browser blocked every real cross-origin tag request.
+//
+// The preflight only authorizes the request *shape*. We answer permissively for
+// any Origin; the real request is still fully authenticated by
+// authenticateTagRequest (key + originAllowedForProject), which is the actual
+// anti-abuse boundary. A permissive preflight grants nothing on its own.
 export async function handleTagPreflight(request) {
   const origin = request.headers.get("origin");
   if (!origin) return new NextResponse(null, { status: 204 });
 
-  const key = extractApiKey(request);
-  if (!key) {
-    // Origin is present but no key — return CORS headers without echoing
-    // origin so the real request will fail cleanly with a CORS error rather
-    // than 401. The tag would then know to prompt the brand to fix their
-    // <script data-lm-key> attribute.
-    return new NextResponse(null, { status: 204 });
-  }
-
-  const found = await findProjectByApiKey(key);
-  if (!found) return new NextResponse(null, { status: 204 });
-
-  const allowedOrigin = originAllowedForProject(request, found.project);
-  if (!allowedOrigin) return new NextResponse(null, { status: 204 });
-
   return new NextResponse(null, {
     status: 204,
-    headers: corsHeaders(allowedOrigin),
+    headers: corsHeaders(origin),
   });
 }
 

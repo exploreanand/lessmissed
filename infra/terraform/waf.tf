@@ -67,6 +67,27 @@ resource "aws_wafv2_web_acl" "app" {
             count {}
           }
         }
+        # The tag ingests event data (URLs, text, CSS selectors) that trips the
+        # XSS/SQLi body rules and gets blocked. /api/tag/* is key+origin
+        # authenticated and rate limited (rate-tag), so exempt it from this
+        # managed group rather than weakening the rules for the whole app.
+        scope_down_statement {
+          not_statement {
+            statement {
+              byte_match_statement {
+                positional_constraint = "STARTS_WITH"
+                search_string         = "/api/tag/"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "NONE"
+                }
+              }
+            }
+          }
+        }
       }
     }
     visibility_config {
