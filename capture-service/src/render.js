@@ -291,6 +291,17 @@ async function installGuards(context, expectedHostname) {
 
     if (!["http:", "https:"].includes(parsed.protocol)) return route.abort();
 
+    // Never let the LessMissed tag run inside a capture. It would paint our own
+    // consent pop-up (and any other tag UI) into the screenshot — which is meant
+    // to be a clean backdrop for the overlays — and register a bogus session
+    // from the worker's IP. Dropping the entry script kills the whole tag:
+    // webgazer and the model files are fetched only from inside it, so they are
+    // never requested once it is gone. Matched by the stable public path so it
+    // survives a future /tag/v2/.
+    if (parsed.pathname.startsWith("/tag/") && parsed.pathname.endsWith("/lm.js")) {
+      return route.abort();
+    }
+
     if (BLOCKED_HOSTS.some((host) => parsed.hostname.includes(host))) {
       return route.abort();
     }
