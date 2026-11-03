@@ -160,6 +160,10 @@ export default function InstallTab({ projectId, domain }) {
   // Re-render every second so the "N seconds ago" label updates in place
   // without waiting for the next poll.
   const [tick, setTick] = useState(0);
+  // On by default: new installs gate all collection (clicks, scroll, gaze,
+  // camera) behind the tag's built-in consent pop-up. Brands running their
+  // own consent manager can switch it off and call LessMissed.start() later.
+  const [consentPrompt, setConsentPrompt] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
@@ -250,7 +254,8 @@ export default function InstallTab({ projectId, domain }) {
     typeof window !== "undefined" && window.location
       ? window.location.origin
       : "https://lessmissed.com";
-  const snippet = `<!-- LessMissed tag -->\n<script src="${scriptOrigin}/tag/v1/lm.js" data-lm-key="${primaryKey}" async></script>`;
+  const consentAttr = consentPrompt ? ' data-lm-consent="prompt"' : "";
+  const snippet = `<!-- LessMissed tag -->\n<script src="${scriptOrigin}/tag/v1/lm.js" data-lm-key="${primaryKey}"${consentAttr} async></script>`;
 
   return (
     <div className="space-y-6">
@@ -285,6 +290,25 @@ export default function InstallTab({ projectId, domain }) {
 {snippet}
         </pre>
 
+        <label className="mt-3 flex items-start gap-2.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={consentPrompt}
+            onChange={(e) => setConsentPrompt(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-700 text-violet-600 focus:ring-violet-500"
+          />
+          <span className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+            <span className="font-semibold">Show a consent pop-up before tracking</span>{" "}
+            <span className="text-zinc-400">(recommended)</span>
+            <span className="block text-zinc-500 dark:text-zinc-400 mt-0.5">
+              Adds{" "}
+              <code className="font-mono text-zinc-700 dark:text-zinc-300">data-lm-consent=&quot;prompt&quot;</code>.
+              Nothing — clicks, scroll, cursor or camera — is collected until the visitor clicks Allow.
+              Turn off only if you run your own consent manager.
+            </span>
+          </span>
+        </label>
+
         {(!keys || keys.length === 0) && (
           <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
             You need a key first — create one below. The snippet above uses a placeholder.
@@ -294,11 +318,12 @@ export default function InstallTab({ projectId, domain }) {
         <ul className="mt-4 space-y-1.5 text-xs text-zinc-500 dark:text-zinc-400">
           <li>· The tag captures clicks, scroll, cursor and page transitions out of the box.</li>
           <li>· Gaze tracking activates when the visitor grants camera permission — no calibration UI needed, it self-adjusts on every click.</li>
-          <li>· If you need consent-gated activation, set{" "}
-            <code className="font-mono text-zinc-700 dark:text-zinc-300">window.LM_REQUIRE_CONSENT = true</code>{" "}
-            before the tag loads and call{" "}
-            <code className="font-mono text-zinc-700 dark:text-zinc-300">window.LessMissed.start()</code>{" "}
-            after the user opts in.
+          <li>· With the consent pop-up on, the camera prompt appears only after the visitor clicks Allow. Reword it with{" "}
+            <code className="font-mono text-zinc-700 dark:text-zinc-300">data-lm-consent-text</code>{" "}
+            or link a policy with{" "}
+            <code className="font-mono text-zinc-700 dark:text-zinc-300">data-lm-privacy-url</code>, and call{" "}
+            <code className="font-mono text-zinc-700 dark:text-zinc-300">window.LessMissed.revokeConsent()</code>{" "}
+            to let visitors opt back out.
           </li>
         </ul>
       </div>
