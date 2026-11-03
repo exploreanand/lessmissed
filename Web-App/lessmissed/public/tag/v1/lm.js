@@ -24,9 +24,12 @@
  *  - SPA navigation is intercepted by patching history.pushState in the
  *    page's own JS realm, which the extension's isolated world could not
  *    do (see the comment in background.ts:285).
- *  - Consent-gated boot: if window.LM_REQUIRE_CONSENT === true is set
- *    before this script loads, the tag waits for window.LessMissed.start()
- *    before doing anything network-facing.
+ *  - Consent-gated boot: add data-lm-consent="prompt" to the tag and it
+ *    shows its own opt-in pop-up, holding ALL collection (session, clicks,
+ *    gaze, camera) until the visitor clicks Allow — no brand-side UI needed.
+ *    Alternatively a brand can set window.LM_REQUIRE_CONSENT === true and
+ *    drive window.LessMissed.start() from its own UI. Copy is overridable
+ *    via data-lm-consent-text and data-lm-privacy-url.
  */
 (function () {
   'use strict';
@@ -49,6 +52,16 @@
   }
   var API_BASE = new URL(scriptEl.src).origin;
 
+  // Consent via the script tag (no brand source changes). data-lm-consent="prompt"
+  // makes the tag inject its own opt-in pop-up and hold ALL data collection
+  // (session, clicks, gaze, camera) until the visitor clicks Allow. Copy and an
+  // optional privacy link are overridable from the same tag.
+  var consentMode = (scriptEl.getAttribute('data-lm-consent') || '').toLowerCase();
+  var consentText = scriptEl.getAttribute('data-lm-consent-text') ||
+    'We measure anonymous interactions and attention — including eye tracking via your camera — to improve this experience. Nothing is sold and you can opt out anytime. Allow?';
+  var consentPrivacyUrl = scriptEl.getAttribute('data-lm-privacy-url') || '';
+  var CONSENT_KEY = 'lm.consent.v1';
+
   var VERSION = '1.0.0';
   var COOKIE_NAME = 'lm_vid';
   var COOKIE_MAX_AGE = 365 * 24 * 60 * 60; // 1 year
@@ -67,9 +80,14 @@
   ]);
 
   // ── Consent gate ─────────────────────────────────────────────────────────
-  // Brands in consent-required jurisdictions can set this global before this
-  // script loads to defer boot until the user opts in.
-  var requireConsent = window.LM_REQUIRE_CONSENT === true;
+  // Three ways in, in precedence order:
+  //   1. data-lm-consent="prompt" — the tag shows its own opt-in pop-up.
+  //   2. window.LM_REQUIRE_CONSENT === true — the brand drives consent and
+  //      calls LessMissed.start() from its own UI.
+  //   3. neither — boot immediately, as before.
+  // Either of the first two defers everything until consent is granted.
+  var promptConsent = consentMode === 'prompt';
+  var requireConsent = promptConsent || window.LM_REQUIRE_CONSENT === true;
   var consentGranted = !requireConsent;
 
   // ── Public API namespace ────────────────────────────────────────────────
@@ -82,6 +100,14 @@
     stop: function () {
       endSession('user_stop');
     },
+    // Clear a stored consent choice, stop any live session, and (in prompt
+    // mode) re-show the opt-in pop-up. Backs a "manage preferences" control.
+    revokeConsent: function () {
+      try { localStorage.removeItem(CONSENT_KEY); } catch (_) {}
+      consentGranted = !requireConsent;
+      endSession('consent_revoked');
+      if (promptConsent) showConsentPrompt();
+    },
     // Escape hatch for turning off gaze at runtime (e.g., after user revokes
     // camera in their browser settings — the tag can't observe that live).
     disableGaze: function () {
@@ -93,10 +119,87 @@
         session: session,
         gaze: !!webgazerReady,
         queue: queue.length,
+        consent: consentGranted,
       };
     },
   };
   window.LessMissed = LessMissed;
+
+  // ── Consent pop-up (prompt mode) ─────────────────────────────────────────
+  // Entirely self-contained: injected into the brand page in a shadow root so
+  // its styles neither leak nor inherit. Decision is persisted per-origin so a
+  // visitor is asked once, not on every page.
+  function readStoredConsent() {
+    try {
+      var v = JSON.parse(localStorage.getItem(CONSENT_KEY) || 'null');
+      return v && v.decision;
+    } catch (_) { return null; }
+  }
+  function writeStoredConsent(decision) {
+    try {
+      localStorage.setItem(CONSENT_KEY, JSON.stringify({ decision: decision, at: Date.now() }));
+    } catch (_) {}
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var consentHost = null;
+  function removeConsentPrompt() {
+    if (consentHost && consentHost.parentNode) consentHost.parentNode.removeChild(consentHost);
+    consentHost = null;
+  }
+  function grantConsent() {
+    writeStoredConsent('granted');
+    consentGranted = true;
+    removeConsentPrompt();
+    maybeBoot();
+  }
+  function declineConsent() {
+    writeStoredConsent('declined');
+    consentGranted = false;
+    removeConsentPrompt();
+  }
+  function showConsentPrompt() {
+    if (consentHost || !document.body) return;
+    var host = document.createElement('div');
+    host.setAttribute('data-lm-consent', '');
+    var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+    var safeUrl = /^https?:\/\//i.test(consentPrivacyUrl) ? consentPrivacyUrl : '';
+    var link = safeUrl
+      ? ' <a class="lm-link" href="' + encodeURI(safeUrl) + '" target="_blank" rel="noopener noreferrer">Privacy</a>'
+      : '';
+    root.innerHTML =
+      '<style>' +
+      ':host{all:initial}' +
+      '*{box-sizing:border-box}' +
+      '.lm-card{position:fixed;left:16px;bottom:16px;z-index:2147483647;max-width:360px;' +
+        'width:calc(100vw - 32px);padding:16px;border-radius:12px;background:#fff;color:#111827;' +
+        'border:1px solid #e5e7eb;box-shadow:0 10px 30px rgba(0,0,0,.18);' +
+        'font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+      '.lm-msg{margin:0 0 12px}' +
+      '.lm-link{color:#4f46e5;text-decoration:underline}' +
+      '.lm-actions{display:flex;gap:8px;justify-content:flex-end}' +
+      '.lm-btn{appearance:none;border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}' +
+      '.lm-allow{background:#4f46e5;color:#fff}' +
+      '.lm-decline{background:#f3f4f6;color:#374151}' +
+      '@media (prefers-color-scheme:dark){.lm-card{background:#1f2937;color:#f9fafb;border-color:#374151}' +
+        '.lm-decline{background:#374151;color:#e5e7eb}}' +
+      '</style>' +
+      '<div class="lm-card" role="dialog" aria-label="Data consent">' +
+        '<p class="lm-msg">' + escapeHtml(consentText) + link + '</p>' +
+        '<div class="lm-actions">' +
+          '<button class="lm-btn lm-decline" type="button">No thanks</button>' +
+          '<button class="lm-btn lm-allow" type="button">Allow</button>' +
+        '</div>' +
+      '</div>';
+    root.querySelector('.lm-allow').addEventListener('click', grantConsent);
+    root.querySelector('.lm-decline').addEventListener('click', declineConsent);
+    document.body.appendChild(host);
+    consentHost = host;
+  }
 
   // ── Visitor identity ────────────────────────────────────────────────────
   function getRootDomain() {
@@ -705,5 +808,17 @@
   // The bootstrap is deferred to the next task so the brand can set
   // window.LM_REQUIRE_CONSENT after including the script tag but before we
   // start doing network work.
-  setTimeout(maybeBoot, 0);
+  function boot() {
+    if (promptConsent && !consentGranted) {
+      var prior = readStoredConsent();
+      if (prior === 'granted') { consentGranted = true; maybeBoot(); return; }
+      if (prior === 'declined') return; // respect a prior opt-out — don't nag
+      // Body may not be parsed yet when an async script runs early.
+      if (document.body) showConsentPrompt();
+      else document.addEventListener('DOMContentLoaded', showConsentPrompt, { once: true });
+      return;
+    }
+    maybeBoot();
+  }
+  setTimeout(boot, 0);
 })();
