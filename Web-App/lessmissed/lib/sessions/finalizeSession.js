@@ -1,10 +1,14 @@
-import Session from "@/lib/models/Session";
-import Project from "@/lib/models/Project";
-import Event from "@/lib/models/Event";
-import Fixation from "@/lib/models/Fixation";
-import { deriveFixations } from "@/lib/deriveFixations";
-import { computeSessionEngagement } from "@/lib/insights/engagement";
-import { normalizePath, findMatchingPage } from "@/lib/pathTemplate";
+// Relative imports (with .js) rather than the "@/" alias: this module is run
+// both by Next.js routes and, verbatim, by the plain-Node capture worker's
+// idle-session sweeper, which has no bundler to resolve the alias. Same
+// constraint as deriveFixations.js and pathTemplate.js.
+import Session from "../models/Session.js";
+import Project from "../models/Project.js";
+import Event from "../models/Event.js";
+import Fixation from "../models/Fixation.js";
+import { deriveFixations } from "../deriveFixations.js";
+import { computeSessionEngagement } from "../insights/engagement.js";
+import { normalizePath, findMatchingPage } from "../pathTemplate.js";
 
 // Shared finalize path used by both /api/extension/sessions/[id] PATCH and
 // /api/tag/sessions/[id] PATCH. Kept here because the two ingest surfaces

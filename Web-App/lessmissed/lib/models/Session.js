@@ -67,6 +67,10 @@ const sessionSchema = new mongoose.Schema(
     active_time_ms: { type: Number, default: 0 },
     started_at: { type: Date, required: true },
     ended_at: { type: Date, default: null },
+    // Refreshed on every ingest so the idle-session sweeper can tell when a
+    // visitor has left (the tag never reliably finalizes on its own). Defaults
+    // to session-start so a session with no later events is still sweepable.
+    last_activity_at: { type: Date, default: Date.now },
     summary: {
       total_fixations: { type: Number, default: 0 },
       total_clicks: { type: Number, default: 0 },
@@ -87,5 +91,7 @@ sessionSchema.index({ task_id: 1 });
 // Per-page session scoping — "which sessions touched this page" is now a real
 // question with a real answer, asked by every page-detail query.
 sessionSchema.index({ project_id: 1, "pages_visited.template": 1 });
+// The idle-session sweeper scans active sessions oldest-activity-first.
+sessionSchema.index({ status: 1, last_activity_at: 1 });
 
 export default mongoose.models.Session || mongoose.model("Session", sessionSchema);

@@ -9,10 +9,28 @@ import { config, assertConfig } from "./config.js";
 import { leaseJob, heartbeat, completeJob, failJob, reapExpired } from "./queue.js";
 import { runCaptureJob } from "./capture.js";
 import { BrowserPool } from "./render.js";
+import { sweepIdleSessions } from "../../Web-App/lessmissed/lib/sessions/sweepIdleSessions.js";
 
 const pool = new BrowserPool();
 let running = true;
 let inFlight = 0;
+let lastSweepAt = 0;
+
+// Finalize sessions whose visitors have left (see sweepIdleSessions). Throttled
+// to sessionSweepIntervalMs and run inline in the main loop so it shares this
+// worker's single DB connection and never competes for a render slot. The
+// worker is single-instance, which is why this needs no cross-process lock.
+async function maybeSweepSessions() {
+  if (config.sessionSweepIntervalMs <= 0) return;
+  if (Date.now() - lastSweepAt < config.sessionSweepIntervalMs) return;
+  lastSweepAt = Date.now();
+  try {
+    const n = await sweepIdleSessions({ idleMs: config.sessionIdleMs });
+    if (n) console.log(`[capture] finalized ${n} idle session(s)`);
+  } catch (err) {
+    console.error(`[capture] session sweep error: ${err.message}`);
+  }
+}
 
 async function main() {
   assertConfig();
@@ -23,6 +41,8 @@ async function main() {
 
   while (running) {
     try {
+      await maybeSweepSessions();
+
       const reaped = await reapExpired();
       if (reaped) console.log(`[capture] reclaimed ${reaped} expired lease(s)`);
 

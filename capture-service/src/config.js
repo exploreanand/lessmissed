@@ -33,6 +33,13 @@ export const config = {
   // this is the latency an admin sees between clicking and the render starting.
   pollIntervalMs: num("CAPTURE_POLL_INTERVAL_MS", 2000),
 
+  // Idle-session finalization. A visitor who just leaves never finalizes their
+  // session client-side, so the worker finalizes any session with no ingest for
+  // sessionIdleMs (matches the tag's own SESSION_IDLE_MS), sweeping this often.
+  // Set CAPTURE_SESSION_SWEEP_INTERVAL_MS=0 to disable the sweep entirely.
+  sessionIdleMs: num("SESSION_IDLE_MS", 30 * 60 * 1000),
+  sessionSweepIntervalMs: num("CAPTURE_SESSION_SWEEP_INTERVAL_MS", 5 * 60 * 1000),
+
   // Per-phase render budgets. Navigation is the one that actually trips on slow
   // sites; the rest are generous and exist so a hung page cannot hold a slot.
   navigationTimeoutMs: num("CAPTURE_NAVIGATION_TIMEOUT_MS", 45000),

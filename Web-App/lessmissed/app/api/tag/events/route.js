@@ -85,9 +85,11 @@ export async function POST(request) {
   if (scrolls) inc["summary.total_scroll_events"] = scrolls;
   if (gazes) inc["summary.total_fixations"] = gazes;
 
-  if (Object.keys(inc).length) {
-    await Session.updateOne({ session_id }, { $inc: inc });
-  }
+  // Always refresh activity so the idle-session sweeper can finalize this
+  // session once the visitor stops — the tag has no reliable client-side end.
+  const update = { $set: { last_activity_at: new Date() } };
+  if (Object.keys(inc).length) update.$inc = inc;
+  await Session.updateOne({ session_id }, update);
 
   return jsonWithCors({ ok: true, inserted }, 200, cors);
 }
