@@ -9,11 +9,10 @@ import { getOrCreateAnonymousConsumer, isValidVisitorId } from "@/lib/auth/anony
 // POST /api/tag/sessions
 // Body: { visitor_id, page_url, task_id?, started_at?, viewport_width?, viewport_height?, dpr? }
 //
-// Mirror of /api/extension/sessions but auth'd by tag key (not cookie) and
-// bound to a visitor_id (not a logged-in consumer). The visitor_id is minted
-// into an anonymous User row so every downstream ref (Session, Event,
-// Fixation) stays ObjectId-typed and every insight already written keeps
-// working with no changes.
+// Auth'd by a tag key (not a cookie) and bound to a visitor_id rather than a
+// logged-in consumer. The visitor_id is minted into an anonymous User row so
+// every downstream ref (Session, Event, Fixation) stays ObjectId-typed and
+// every insight keeps working with no changes.
 export const OPTIONS = handleTagPreflight;
 
 export async function POST(request) {

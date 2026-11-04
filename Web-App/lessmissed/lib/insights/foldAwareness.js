@@ -52,8 +52,8 @@ export async function computeFoldAwareness(project, page) {
 
   // Group fixations by the same identity ladder page.jsx uses, and carry
   // element position: prefer the recorded element_rect (top edge + height),
-  // else fall back to the average fixation center — the extension does not
-  // always send element_rect, so a fallback is what makes the card render
+  // else fall back to the average fixation center — historical sessions do not
+  // always carry element_rect, so a fallback is what makes the card render
   // rather than sit empty.
   const grouped = await Fixation.aggregate([
     { $match: { project_id: project._id, ...pageMatchFilter(page) } },

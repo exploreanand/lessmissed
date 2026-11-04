@@ -12,11 +12,9 @@ import { handleTagPreflight, authenticateTagRequest, jsonWithCors } from "@/lib/
 // POST /api/tag/visits
 // Body: { session_id, path, url, entered_at, referrer_path }
 //
-// Mirror of /api/extension/visits. Fires once per page transition — the tag's
-// history-patching detects both hard loads and SPA navs and posts here to
-// register the page (auto-discovering it if new) and roll the session's
-// journey forward. Any changes to page-discovery caps belong in both this
-// route and the extension one until we extract a shared helper.
+// Fires once per page transition — the tag's history-patching detects both
+// hard loads and SPA navs and posts here to register the page (auto-discovering
+// it if new) and roll the session's journey forward.
 
 // A site that generates URLs (search, filters, pagination) could grow
 // Project.pages without bound. Past the cap we keep collecting events —

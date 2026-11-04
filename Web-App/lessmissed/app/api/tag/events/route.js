@@ -7,7 +7,7 @@ import { handleTagPreflight, authenticateTagRequest, jsonWithCors } from "@/lib/
 // POST /api/tag/events
 // Body: { session_id, events: [{ timestamp, type, page_url, data }] }
 //
-// Mirror of /api/extension/events. The key + origin check is enough to
+// The key + origin check is enough to
 // authorize the batch — the session's project_id is looked up server-side
 // (and cross-checked against the tag's project) so a leaked key from one
 // project cannot post events into another project's session by id.

@@ -1,16 +1,14 @@
 /*!
  * LessMissed Tag v1.0.0
  *
- * A drop-in head script that captures the same signals the LessMissed browser
- * extension does — clicks, scrolls, cursor motion, page visibility, SPA
- * navigation, and (with camera consent) gaze — and posts them to the tag
- * ingest API. Intended to be embedded once on a brand's site:
+ * A drop-in head script that captures clicks, scrolls, cursor motion, page
+ * visibility, SPA navigation, and (with camera consent) gaze, and posts them
+ * to the tag ingest API. Intended to be embedded once on a brand's site:
  *
  *   <script src="https://lessmissed.com/tag/v1/lm.js" data-lm-key="pk_..." async></script>
  *
- * The API shape it targets (POST /api/tag/{sessions,events,visits}, PATCH
- * /api/tag/sessions/:id) is the mirror of /api/extension/*, and the
- * downstream insight pipeline is identical — no analytics-side changes.
+ * It is the only ingest surface: POST /api/tag/{sessions,events,visits} and
+ * PATCH /api/tag/sessions/:id feed the insight pipeline directly.
  *
  * Design notes:
  *  - Auth is a publishable pk_ key in a request header, per project. The

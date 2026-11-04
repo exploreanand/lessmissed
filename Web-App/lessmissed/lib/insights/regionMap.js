@@ -112,9 +112,9 @@ function classify({ tag, label, bbox }, pageWidth, foldHeight) {
 /**
  * Build regions from element bounding boxes recorded on fixations.
  *
- * This is the exact path — it needs the extension to send element_rect. For
- * historical sessions no rect exists, so callers should fall back to
- * buildRegionsFromClusters().
+ * This is the exact path — it needs element_rect on the fixation, which the
+ * tag sends. For historical sessions no rect exists, so callers should fall
+ * back to buildRegionsFromClusters().
  *
  * @param {Array} fixations lean Fixation docs for one page
  * @param {{width:number, fold:number}} page screenshot dimensions

@@ -12,7 +12,6 @@ LessMissed connects brands who need real user behaviour data with consumers who 
 LESSMISSED/
 ├── Web-App/lessmissed/     # Next.js dashboard + API
 ├── capture-service/        # Background worker that screenshots target pages
-├── lessmissed_extension/   # Chrome extension that records consumer sessions
 ├── label-service/          # Optional: Python image-labelling service
 └── evaluation/             # Research harness for the paper — not needed to run the app
 ```
@@ -21,13 +20,13 @@ LESSMISSED/
 |---|---|---|---|
 | **Web app** | Next.js 16 · React 19 · MongoDB · S3 | `npm run dev` on :3000 | Yes |
 | **Capture service** | Node · Playwright/Chromium · MongoDB · S3 | a long-running process | Yes, for page previews |
-| **Extension** | TypeScript · React · Webpack · WebGazer | unpacked in Chrome | Yes, to record sessions |
+| **Tag** (`lm.js`) | Vanilla JS · WebGazer | a `<script>` on the client's site | Yes, to record sessions |
 | **Label service** | Python · FastAPI · Florence-2 | `uvicorn` on :8077 | No |
 
 ### How the pieces talk
 
 ```
-  Chrome extension ──events, page visits──►  Web app  ◄──reads──  You (dashboard)
+  lm.js script tag ──events, page visits──►  Web app  ◄──reads──  You (dashboard)
                                                │
                                         writes capture jobs
                                                ▼
@@ -54,7 +53,7 @@ The web app and the capture service never call each other. The web app writes a 
 
 ## Setup
 
-Do these in order — the capture service and extension both need the web app running.
+Do these in order — the capture service needs the web app running.
 
 ### 1. Web app
 
@@ -81,32 +80,12 @@ No separate `.env` is needed: `npm start` reads `../Web-App/lessmissed/.env.loca
 
 `npm run doctor` is the first thing to run whenever something looks wrong. It tells you which link is broken — missing config, Chromium not installed, database unreachable, or jobs waiting because no worker is running.
 
-### 3. Chrome extension
-
-```bash
-cd lessmissed_extension
-npm install
-npm run build                   # writes dist/
-```
-
-Then in Chrome:
-1. Go to `chrome://extensions` and turn on **Developer mode**.
-2. Click **Load unpacked** and choose `lessmissed_extension/dist`.
-
-The extension talks to `http://localhost:3000` by default. To build it against another server:
-
-```bash
-API_BASE=https://your-server.example.com npm run build
-```
-
-**After every rebuild, click the reload icon on the extension card in `chrome://extensions`.** Chrome keeps running the old code until you do.
-
-### 4. Try it end to end
+### 3. Try it end to end
 
 1. In the dashboard, click **New project**. Enter the site's URL and at least one page to track — paste full URLs or type paths.
 2. Within a few seconds each page shows **Preview ready**. If it stays on *Preparing preview…*, the capture service isn't running — see [Troubleshooting](#troubleshooting).
-3. In the **same Chrome profile** you're logged into the dashboard with, visit the site. Open the extension popup, click **Calibrate** and follow the dots, then **Start Tracking**.
-4. Browse a few pages, then click **Stop Tracking**.
+3. Open the project's **Install** tab and copy the `<script>` snippet, then add it to the site you want to track (a local test page is fine).
+4. Load that page, click **Allow** on the consent pop-up, and browse a few pages.
 5. Back in the dashboard, open a page to see its heatmap.
 
 ---
@@ -134,10 +113,6 @@ API_BASE=https://your-server.example.com npm run build
 
 It uses the web app's values above. Tuning knobs — concurrency, timeouts, the change threshold, how many versions to keep — are documented in `capture-service/.env.example` and all have sensible defaults.
 
-### Extension
-
-Only `API_BASE`, set at build time (see step 3).
-
 ---
 
 ## Day-to-day commands
@@ -150,8 +125,6 @@ Only `API_BASE`, set at build time (see step 3).
 | | `npm run doctor` | Diagnose why previews aren't appearing |
 | | `node src/capture-once.js <url>` | Render one URL to a local file — no database or S3 needed |
 | | `npm test` | Run the test suite |
-| `lessmissed_extension` | `npm run build` | Build once into `dist/` |
-| | `npm start` | Rebuild on every change (development) |
 
 ---
 
@@ -175,7 +148,7 @@ Without `CAPTURE_TEST_MONGO_URI` those tests skip themselves rather than fail.
 
 ## How page capture works
 
-Screenshots are taken **on the server**, by the capture service, and only of the pages you configure as **target pages**. The extension no longer takes screenshots.
+Screenshots are taken **on the server**, by the capture service, and only of the pages you configure as **target pages**.
 
 - **Adding a page** queues a baseline capture. **Recapture** queues a new one on demand — use it after you change the page.
 - Each capture opens a fresh 1440×900 headless Chromium, blocks ads and trackers, dismisses cookie banners, scrolls so lazy images load, waits for fonts and images, and takes one full-page screenshot. It also records every visible element on the page, which is what "missed elements" is measured against.
@@ -217,9 +190,6 @@ The page-to-page flow is at `GET /api/projects/:id/flow`.
 |---|---|---|
 | Page stuck on **Preparing preview…** | Capture service isn't running | `cd capture-service && npm run doctor`, then `npm start` |
 | Preview shows as a broken image | S3 bucket isn't publicly readable | Allow public reads on `screenshots/*` |
-| Extension changes have no effect | Chrome is still running the old build | Rebuild, then reload the extension in `chrome://extensions` |
-| Popup says **Log in to dashboard** | Not logged in, or logged in on another Chrome profile | Log in at http://localhost:3000 in the same profile |
-| Popup says **Reload the page (F5)** | The tab was open before the extension was installed | Reload the tab |
 | Captures behave like old code | An older worker is still running | `pkill -f src/worker.js`, then `npm start` |
 | A page shows **Couldn't capture** | The URL failed three times (404, timeout, blocked) | Check the URL opens in a browser, then click Recapture |
 

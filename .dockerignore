@@ -19,7 +19,6 @@ Claude outputs/
 **/.DS_Store
 
 # Not needed by the capture worker
-lessmissed_extension
 evaluation
 label-service
 **/*.md

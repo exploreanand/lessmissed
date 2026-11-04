@@ -10,11 +10,11 @@ import { deriveFixations } from "../deriveFixations.js";
 import { computeSessionEngagement } from "../insights/engagement.js";
 import { normalizePath, findMatchingPage } from "../pathTemplate.js";
 
-// Shared finalize path used by both /api/extension/sessions/[id] PATCH and
-// /api/tag/sessions/[id] PATCH. Kept here because the two ingest surfaces
-// have different auth models but identical finalize semantics, and letting
-// the logic drift would silently produce different engagement numbers for
-// sessions ingested through the two paths.
+// Shared finalize path used by /api/tag/sessions/[id] PATCH and by the capture
+// worker's idle-session sweeper. Kept here because a session can be closed
+// either by the tag calling in or by the sweeper reaping it, and letting the
+// logic drift would silently produce different engagement numbers depending on
+// which one got there first.
 
 /**
  * Give every visit the template it belongs to. Page identity is the server's

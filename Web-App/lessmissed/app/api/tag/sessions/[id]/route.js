@@ -15,12 +15,11 @@ import {
 // Without it, this is a partial checkpoint — the tag uses that during a long
 // session to sync its accumulated journey to the server.
 //
-// Shares the finalize path with /api/extension/sessions/[id] via
-// lib/sessions/finalizeSession.js — do not duplicate the engagement/rollup
-// logic here.
+// The finalize path lives in lib/sessions/finalizeSession.js, shared with the
+// capture worker's idle-session sweeper — do not duplicate the
+// engagement/rollup logic here.
 
-// Fixation derivation on a long session can take tens of seconds — same
-// budget as the extension route.
+// Fixation derivation on a long session can take tens of seconds.
 export const maxDuration = 60;
 
 export const OPTIONS = handleTagPreflight;

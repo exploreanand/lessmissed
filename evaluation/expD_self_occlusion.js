@@ -7,10 +7,10 @@
  *
  * The gaze dot is reproduced with the exact styles WebGazer applies
  * (position:fixed, z-index 99999, 10x10 px, opacity .7, no pointer-events
- * override) as read from the WebGazer build bundled in the extension.
+ * override) as read from the WebGazer build the tag loads.
  *
- * The resolver functions are copied verbatim from
- *   lessmissed_extension/src/contentScript/contentScript.ts
+ * The resolver functions mirror the tag's element resolver in
+ *   Web-App/lessmissed/public/tag/v1/lm.js (resolveElementId / resolveElementKey)
  *
  * Ground truth for each sample point is elementFromPoint evaluated with the
  * dot removed from the document: the element the page would report if the

@@ -2,13 +2,13 @@
 //
 // Regression for a bug that made every page in every project read "0 sessions"
 // and left discovered pages stuck at "awaiting data" forever: finalize replaced
-// the session's journey with the extension's copy, which carries only path,
+// the session's journey with the client's copy, which carries only path,
 // entered_at and left_at. Every `pages_visited[].template` in the live database
 // was null as a result, and the rollup — which filters on Boolean(template) —
 // silently did nothing.
 //
 // These exercise the resolution rule directly: the template must come from the
-// server, matching what /api/extension/visits computes, and a payload with no
+// server, matching what /api/tag/visits computes, and a payload with no
 // templates at all must still produce correct ones.
 
 import { test, before, after, beforeEach } from "node:test";
