@@ -64,7 +64,13 @@ resource "aws_cloudfront_distribution" "app" {
   aliases         = [local.apex_domain, local.www_domain]
   comment         = "${local.name} app"
   price_class     = "PriceClass_All"
-  web_acl_id      = local.edge_enabled ? aws_wafv2_web_acl.app[0].arn : null
+  # one(...[*].arn) rather than a `paused ? ... : null` ternary on purpose: the
+  # splat still *references* the ACL, so Terraform keeps the dependency edge and
+  # orders this distribution's update (detaching the ACL) before destroying it.
+  # A ternary evaluates to null without naming the resource, which drops the
+  # edge and makes the WAF delete race ahead of the detach — DeleteWebACL then
+  # fails with WAFAssociatedItemException. one([]) is null when count = 0.
+  web_acl_id = one(aws_wafv2_web_acl.app[*].arn)
 
   origin {
     domain_name = local.origin_domain

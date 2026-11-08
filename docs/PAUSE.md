@@ -153,3 +153,31 @@ pause itself:
 What you should *not* see on `paused=false` is any destroy/recreate of the ALB,
 WAF, alarms or services. If you do, state addresses have drifted and the plan
 needs a closer look before applying.
+
+## If the WAF delete fails with WAFAssociatedItemException
+
+```
+Error: deleting WAFv2 WebACL (...): WAFAssociatedItemException: AWS WAF couldn't
+perform the operation because your resource is being used by another resource
+```
+
+WAFv2 refuses to delete an ACL a distribution still references, so the
+distribution must be updated to drop `web_acl_id` *first*. `cloudfront.tf`
+writes that as `one(aws_wafv2_web_acl.app[*].arn)` rather than a
+`paused ? ... : null` ternary for exactly this reason: the splat still
+references the ACL, so Terraform keeps the dependency edge and orders the
+detach before the destroy. A ternary evaluates to null without naming the
+resource, drops the edge, and lets the delete race ahead of the detach.
+
+If you still hit it, the detach simply has not propagated yet. Confirm the
+distribution has dropped the ACL and finished deploying, then re-run the apply:
+
+```bash
+aws cloudfront get-distribution --id E19SHXYWD3PBC5 --profile lessmissed \
+  --query 'Distribution.{status:Status,webacl:DistributionConfig.WebACLId}'
+# want: status "Deployed" and webacl "" — then:
+terraform apply -var paused=true
+```
+
+A CloudFront update takes 5–15 minutes to propagate; let the apply sit through
+it rather than interrupting, or the run stops half-done.
