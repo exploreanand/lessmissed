@@ -7,6 +7,42 @@ you setup time. `./infra/scripts/resume.sh` brings it back.
 
 Running costs roughly **$105/month**; paused it is roughly **$2–3/month**.
 
+## Quick reference
+
+Everything is in two commands. Both need a valid SSO token first, because
+tokens expire after a few hours and `providers.tf` sets no profile:
+
+```bash
+aws sso login --profile lessmissed    # needed by BOTH, not just the first one
+
+./infra/scripts/pause.sh              # ~15 min -> ~$2-3/month
+./infra/scripts/resume.sh             # ~15 min -> live and smoke-tested
+```
+
+Each shows you Terraform's plan and waits for `yes`; nothing is destroyed or
+created before you confirm. Most of the 15 minutes is CloudFront propagation,
+which cannot be hurried — so resume the day before a presentation, not an hour
+before.
+
+Which state am I in?
+
+```bash
+grep '^paused' infra/terraform/terraform.tfvars
+```
+
+What each script does for you, beyond the apply:
+
+| | `pause.sh` | `resume.sh` |
+|---|---|---|
+| Checks your SSO token is valid | yes | yes |
+| Detaches the WAF from CloudFront in the right order | yes | n/a |
+| Warns if resuming would roll a service back to an old image | n/a | yes |
+| Records `paused` in `terraform.tfvars` so a later bare apply is safe | yes | yes |
+| Polls `/api/health` until it serves, then tests tag ingest | n/a | yes |
+
+The only thing neither does is the one-off checks: the CloudFront pricing plan
+(see below) and keeping the image tags current after a rollout.
+
 ## Pause
 
 `providers.tf` sets no profile, so Terraform reads the environment — without
@@ -75,6 +111,13 @@ stack). `terraform.tfvars` is the sticky desired state; the `-var` on the apply
 line merely agrees with it. If the write ever failed the script aborts rather
 than leave the file disagreeing with reality.
 
+The write is also deliberately ordered so that **every failure path biases the
+file toward paused** — the direction that cannot quietly cost money.
+`pause.sh` writes `true` before its apply, so an interrupted pause still reads
+as paused; `resume.sh` writes `false` only after a successful apply, so
+answering `no` at the prompt leaves the file saying paused rather than claiming
+a resume that never happened.
+
 Practical consequence: **while paused, a bare `terraform apply` is safe** — it
 plans against `paused = true` and will not wake anything up. Check which state
 you are in with:
@@ -86,6 +129,7 @@ grep '^paused' infra/terraform/terraform.tfvars
 ## Resume
 
 ```bash
+aws sso login --profile lessmissed
 ./infra/scripts/resume.sh
 ```
 
@@ -99,7 +143,10 @@ re-attaches the WAF to CloudFront. Because `create_services = true` is already
 in `terraform.tfvars`, it also brings both ECS services back on the image tags
 pinned there.
 
-Then confirm the stack is actually serving:
+The script then verifies the stack itself: it polls `/api/health` for up to ten
+minutes (a new ALB needs a minute or two to pass health checks) and then checks
+tag ingest, and exits non-zero if either fails. So a clean exit means the site
+is serving, not merely that Terraform ran. It runs the equivalent of:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://lessmissed.com/api/health
@@ -126,8 +173,13 @@ aws cloudfront create-invalidation --distribution-id E19SHXYWD3PBC5 \
 `web_image_tag` and `capture_image_tag` in `terraform.tfvars` are what a resume
 deploys. They are separate because the two services roll out independently and
 are normally on different commits — a single shared tag would silently roll one
-of them back. After any rollout, update them. The live task definition is the
-source of truth:
+of them back. After any rollout, update them.
+
+`resume.sh` compares both against the newest task definition before applying
+and warns you if they disagree, so a forgotten update is caught rather than
+silently shipped. It still only warns — Terraform's own `yes` prompt is the
+gate, so read the warning rather than reflexively confirming. The live task
+definition is the source of truth:
 
 ```bash
 for s in web capture; do

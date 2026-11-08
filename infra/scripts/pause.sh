@@ -20,8 +20,10 @@ export AWS_PROFILE="${AWS_PROFILE:-lessmissed}"
 ROOT_DOMAIN="${ROOT_DOMAIN:-lessmissed.com}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../terraform"
-# shellcheck source=_paused_state.sh
-source "$SCRIPT_DIR/_paused_state.sh"
+# shellcheck source=_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+require_creds
 
 DIST=$(aws cloudfront list-distributions \
   --query "DistributionList.Items[?contains(Aliases.Items, '${ROOT_DOMAIN}')].Id | [0]" \
