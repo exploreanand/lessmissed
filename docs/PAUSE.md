@@ -1,9 +1,9 @@
 # Pausing AWS between work sessions
 
 LessMissed only needs to be online while a feature is being built or a demo is
-being given. `terraform apply -var paused=true` tears down the pieces that bill
-by the hour whether or not anyone visits, and keeps everything whose loss would
-cost you setup time.
+being given. `./infra/scripts/pause.sh` tears down the pieces that bill by the
+hour whether or not anyone visits, and keeps everything whose loss would cost
+you setup time. `./infra/scripts/resume.sh` brings it back.
 
 Running costs roughly **$105/month**; paused it is roughly **$2–3/month**.
 
@@ -61,14 +61,38 @@ It deliberately keeps:
 MongoDB Atlas is the free M0 tier, so it costs nothing and keeps your data. It
 auto-sleeps after ~60 days idle and wakes on the next connection.
 
+## The paused state is sticky
+
+`var.paused` **defaults to `false`**, so if the flag lived only on the command
+line, any later bare `terraform apply` — changing an alarm email, tweaking a
+WAF rule, anything at all — would quietly recreate the ALB, WAF and health
+check and restart both services. Billing would resume with nothing to signal
+it.
+
+So both scripts also write the flag into `terraform.tfvars` (gitignored, and
+therefore per-machine, which is correct: it describes the state of *your*
+stack). `terraform.tfvars` is the sticky desired state; the `-var` on the apply
+line merely agrees with it. If the write ever failed the script aborts rather
+than leave the file disagreeing with reality.
+
+Practical consequence: **while paused, a bare `terraform apply` is safe** — it
+plans against `paused = true` and will not wake anything up. Check which state
+you are in with:
+
+```bash
+grep '^paused' infra/terraform/terraform.tfvars
+```
+
 ## Resume
 
 ```bash
 ./infra/scripts/resume.sh
 ```
 
-(Equivalent to `terraform apply -var paused=false` with `AWS_PROFILE` set.
-Resume needs no special ordering — nothing is being destroyed.)
+(Equivalent to `terraform apply -var paused=false` with `AWS_PROFILE` set, plus
+the `paused = false` write into `terraform.tfvars`. Resume needs no special
+ordering — nothing is being destroyed, and the `one(aws_wafv2_web_acl.app[*].arn)`
+reference in `cloudfront.tf` makes Terraform create the ACL before attaching it.)
 
 This recreates the ALB, WAF, health check, alarms and the `origin` record, and
 re-attaches the WAF to CloudFront. Because `create_services = true` is already

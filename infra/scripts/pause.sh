@@ -18,7 +18,10 @@ set -euo pipefail
 
 export AWS_PROFILE="${AWS_PROFILE:-lessmissed}"
 ROOT_DOMAIN="${ROOT_DOMAIN:-lessmissed.com}"
-cd "$(dirname "$0")/../terraform"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../terraform"
+# shellcheck source=_paused_state.sh
+source "$SCRIPT_DIR/_paused_state.sh"
 
 DIST=$(aws cloudfront list-distributions \
   --query "DistributionList.Items[?contains(Aliases.Items, '${ROOT_DOMAIN}')].Id | [0]" \
@@ -55,6 +58,8 @@ PY
     echo "WAF already detached from CloudFront."
   fi
 fi
+
+set_paused true
 
 echo "Applying paused=true ..."
 terraform apply -var paused=true
