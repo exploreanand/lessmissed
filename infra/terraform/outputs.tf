@@ -22,7 +22,8 @@ output "ecr_capture_url" {
 }
 
 output "alb_dns_name" {
-  value = aws_lb.app.dns_name
+  value       = local.edge_enabled ? aws_lb.app[0].dns_name : null
+  description = "Null while paused = true (the ALB is destroyed)."
 }
 
 output "cloudfront_app_domain" {

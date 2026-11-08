@@ -64,7 +64,7 @@ resource "aws_cloudfront_distribution" "app" {
   aliases         = [local.apex_domain, local.www_domain]
   comment         = "${local.name} app"
   price_class     = "PriceClass_All"
-  web_acl_id      = aws_wafv2_web_acl.app.arn
+  web_acl_id      = local.edge_enabled ? aws_wafv2_web_acl.app[0].arn : null
 
   origin {
     domain_name = local.origin_domain

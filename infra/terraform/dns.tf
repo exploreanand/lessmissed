@@ -59,12 +59,13 @@ resource "aws_route53_record" "www_aaaa" {
 
 # ALB is IPv4-only, so origin.* is an A alias only.
 resource "aws_route53_record" "origin_a" {
+  count   = local.edge_enabled ? 1 : 0
   zone_id = aws_route53_zone.root.zone_id
   name    = local.origin_domain
   type    = "A"
   alias {
-    name                   = aws_lb.app.dns_name
-    zone_id                = aws_lb.app.zone_id
+    name                   = aws_lb.app[0].dns_name
+    zone_id                = aws_lb.app[0].zone_id
     evaluate_target_health = true
   }
 }

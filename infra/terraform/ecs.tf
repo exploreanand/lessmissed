@@ -23,8 +23,10 @@ resource "aws_cloudwatch_log_group" "capture" {
 }
 
 locals {
-  web_image     = "${aws_ecr_repository.repo["${local.name}-web"].repository_url}:${var.image_tag}"
-  capture_image = "${aws_ecr_repository.repo["${local.name}-capture"].repository_url}:${var.image_tag}"
+  web_tag       = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
+  capture_tag   = var.capture_image_tag != "" ? var.capture_image_tag : var.image_tag
+  web_image     = "${aws_ecr_repository.repo["${local.name}-web"].repository_url}:${local.web_tag}"
+  capture_image = "${aws_ecr_repository.repo["${local.name}-capture"].repository_url}:${local.capture_tag}"
 
   common_aws_env = [
     { name = "AWS_REGION", value = var.region },
@@ -122,7 +124,7 @@ resource "aws_ecs_task_definition" "capture" {
 
 # --- Web service (behind the ALB) -------------------------------------------
 resource "aws_ecs_service" "web" {
-  count                  = var.create_services ? 1 : 0
+  count                  = local.services_enabled ? 1 : 0
   name                   = "${local.name}-web"
   cluster                = aws_ecs_cluster.main.id
   task_definition        = aws_ecs_task_definition.web.arn
@@ -142,7 +144,7 @@ resource "aws_ecs_service" "web" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = aws_lb_target_group.web[0].arn
     container_name   = "web"
     container_port   = 3000
   }
@@ -165,7 +167,7 @@ resource "aws_ecs_service" "web" {
 
 # --- Capture service (Fargate Spot, no load balancer) -----------------------
 resource "aws_ecs_service" "capture" {
-  count                  = var.create_services ? 1 : 0
+  count                  = local.services_enabled ? 1 : 0
   name                   = "${local.name}-capture"
   cluster                = aws_ecs_cluster.main.id
   task_definition        = aws_ecs_task_definition.capture.arn
@@ -190,7 +192,7 @@ resource "aws_ecs_service" "capture" {
 
 # --- Web autoscaling --------------------------------------------------------
 resource "aws_appautoscaling_target" "web" {
-  count              = var.create_services ? 1 : 0
+  count              = local.services_enabled ? 1 : 0
   max_capacity       = var.web_max_tasks
   min_capacity       = var.web_min_tasks
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.web[0].name}"
@@ -199,7 +201,7 @@ resource "aws_appautoscaling_target" "web" {
 }
 
 resource "aws_appautoscaling_policy" "web_cpu" {
-  count              = var.create_services ? 1 : 0
+  count              = local.services_enabled ? 1 : 0
   name               = "${local.name}-web-cpu"
   policy_type        = "TargetTrackingScaling"
   resource_id        = aws_appautoscaling_target.web[0].resource_id

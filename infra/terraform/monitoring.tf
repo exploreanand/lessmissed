@@ -8,8 +8,9 @@ resource "aws_sns_topic_subscription" "alarms_email" {
   endpoint  = var.alarm_email
 }
 
-# --- ALB alarms (always on) -------------------------------------------------
+# --- ALB alarms (gone while paused, along with the ALB itself) --------------
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  count               = local.edge_enabled ? 1 : 0
   alarm_name          = "${local.name}-alb-5xx"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
@@ -22,12 +23,13 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   alarm_actions       = [aws_sns_topic.alarms.arn]
   ok_actions          = [aws_sns_topic.alarms.arn]
   dimensions = {
-    LoadBalancer = aws_lb.app.arn_suffix
-    TargetGroup  = aws_lb_target_group.web.arn_suffix
+    LoadBalancer = aws_lb.app[0].arn_suffix
+    TargetGroup  = aws_lb_target_group.web[0].arn_suffix
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "alb_unhealthy" {
+  count               = local.edge_enabled ? 1 : 0
   alarm_name          = "${local.name}-alb-unhealthy-hosts"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
@@ -39,14 +41,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_unhealthy" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alarms.arn]
   dimensions = {
-    LoadBalancer = aws_lb.app.arn_suffix
-    TargetGroup  = aws_lb_target_group.web.arn_suffix
+    LoadBalancer = aws_lb.app[0].arn_suffix
+    TargetGroup  = aws_lb_target_group.web[0].arn_suffix
   }
 }
 
 # --- ECS service alarms (only once services exist) --------------------------
 resource "aws_cloudwatch_metric_alarm" "web_cpu" {
-  count               = var.create_services ? 1 : 0
+  count               = local.services_enabled ? 1 : 0
   alarm_name          = "${local.name}-web-cpu-high"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3
@@ -66,7 +68,7 @@ resource "aws_cloudwatch_metric_alarm" "web_cpu" {
 # Capture worker should always have exactly one task running; no CPU datapoints
 # means the worker is down.
 resource "aws_cloudwatch_metric_alarm" "capture_down" {
-  count               = var.create_services ? 1 : 0
+  count               = local.services_enabled ? 1 : 0
   alarm_name          = "${local.name}-capture-down"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 3
@@ -100,6 +102,7 @@ resource "aws_sns_topic_subscription" "alarms_use1_email" {
 
 # --- Route 53 health check on the public endpoint ---------------------------
 resource "aws_route53_health_check" "app" {
+  count             = local.edge_enabled ? 1 : 0
   fqdn              = local.apex_domain
   type              = "HTTPS"
   resource_path     = "/api/health"
@@ -111,6 +114,7 @@ resource "aws_route53_health_check" "app" {
 
 # Health-check metrics live in us-east-1.
 resource "aws_cloudwatch_metric_alarm" "app_health" {
+  count               = local.edge_enabled ? 1 : 0
   provider            = aws.us_east_1
   alarm_name          = "${local.name}-app-health"
   comparison_operator = "LessThanThreshold"
@@ -123,7 +127,7 @@ resource "aws_cloudwatch_metric_alarm" "app_health" {
   treat_missing_data  = "breaching"
   alarm_actions       = [aws_sns_topic.alarms_use1.arn]
   dimensions = {
-    HealthCheckId = aws_route53_health_check.app.id
+    HealthCheckId = aws_route53_health_check.app[0].id
   }
 }
 

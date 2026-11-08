@@ -2,6 +2,7 @@
 # CLOUDFRONT-scoped ACLs must be created in us-east-1.
 
 resource "aws_wafv2_web_acl" "app" {
+  count       = local.edge_enabled ? 1 : 0
   provider    = aws.us_east_1
   name        = "${local.name}-app"
   description = "App distribution protections"

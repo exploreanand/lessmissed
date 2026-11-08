@@ -73,6 +73,7 @@ resource "aws_security_group" "capture_tasks" {
 }
 
 resource "aws_lb" "app" {
+  count              = local.edge_enabled ? 1 : 0
   name               = "${local.name}-alb"
   internal           = false
   load_balancer_type = "application"
@@ -82,6 +83,7 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "web" {
+  count       = local.edge_enabled ? 1 : 0
   name        = "${local.name}-web"
   port        = 3000
   protocol    = "HTTP"
@@ -101,7 +103,8 @@ resource "aws_lb_target_group" "web" {
 }
 
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.app.arn
+  count             = local.edge_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.app[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -120,12 +123,13 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_rule" "from_cloudfront" {
-  listener_arn = aws_lb_listener.https.arn
+  count        = local.edge_enabled ? 1 : 0
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = 100
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = aws_lb_target_group.web[0].arn
   }
 
   condition {

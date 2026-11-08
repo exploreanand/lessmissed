@@ -51,13 +51,35 @@ variable "atlas_cidr" {
 variable "image_tag" {
   type        = string
   default     = "bootstrap"
-  description = "Container image tag to run (the commit SHA in CI). Used only when create_services = true."
+  description = "Fallback container image tag for both services, used when web_image_tag / capture_image_tag are empty."
+}
+
+# The two services are deployed independently (each rollout registers a task
+# definition for one of them), so they are routinely on different commits. A
+# single shared tag cannot express that and would silently roll one service
+# back on the next apply, so each has its own override.
+variable "web_image_tag" {
+  type        = string
+  default     = ""
+  description = "Image tag for the web service. Falls back to image_tag when empty."
+}
+
+variable "capture_image_tag" {
+  type        = string
+  default     = ""
+  description = "Image tag for the capture worker. Falls back to image_tag when empty."
 }
 
 variable "create_services" {
   type        = bool
   default     = false
   description = "Stand up the ECS services. Keep false on the first apply (no images in ECR yet); flip to true after the first image push."
+}
+
+variable "paused" {
+  type        = bool
+  default     = false
+  description = "Cost pause for an idle project. true destroys the always-billing pieces — the ALB (hourly + 2 public IPv4), the WAF ACL, the Route 53 health check and their alarms — and stops the ECS services. Keeps the hosted zone, ACM certs, CloudFront, ECR images, secrets and the VPC, so a resume is one apply with no image rebuild and no registrar rework. See docs/PAUSE.md."
 }
 
 variable "web_cpu" {
