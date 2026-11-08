@@ -10,15 +10,27 @@ Running costs roughly **$105/month**; paused it is roughly **$2–3/month**.
 ## Pause
 
 `providers.tf` sets no profile, so Terraform reads the environment — without
-`AWS_PROFILE` it fails with "No valid credential sources found". Log in first
-(`aws sso login --profile lessmissed`), then:
+`AWS_PROFILE` it fails with "No valid credential sources found". Log in first,
+then run the script:
 
 ```bash
-cd infra/terraform
-export AWS_PROFILE=lessmissed
-terraform plan  -var paused=true     # read the plan first
-terraform apply -var paused=true
+aws sso login --profile lessmissed
+./infra/scripts/pause.sh
 ```
+
+The script detaches the WAF from CloudFront, waits out the ~5-15 minute
+propagation, then runs `terraform apply -var paused=true` and shows you the plan
+to confirm.
+
+**Do not run `terraform apply -var paused=true` on its own** — it fails with
+`WAFAssociatedItemException`. Terraform only guarantees that *dependents* are
+destroyed before their dependencies; here CloudFront is merely **updated**
+(dropping `web_acl_id`) while the WAF ACL is **destroyed**, so the two run in
+parallel and the delete beats the detach. `-target=aws_cloudfront_distribution.app`
+does not help either, because `-target` pulls in the target's dependencies and
+schedules the same WAF destroy. The script's out-of-band detach is not drift —
+it is exactly the state Terraform wants while paused, which is why the apply
+then reports `0 changed` for the distribution.
 
 That destroys:
 
@@ -52,10 +64,11 @@ auto-sleeps after ~60 days idle and wakes on the next connection.
 ## Resume
 
 ```bash
-cd infra/terraform
-export AWS_PROFILE=lessmissed
-terraform apply -var paused=false
+./infra/scripts/resume.sh
 ```
+
+(Equivalent to `terraform apply -var paused=false` with `AWS_PROFILE` set.
+Resume needs no special ordering — nothing is being destroyed.)
 
 This recreates the ALB, WAF, health check, alarms and the `origin` record, and
 re-attaches the WAF to CloudFront. Because `create_services = true` is already
@@ -161,23 +174,24 @@ Error: deleting WAFv2 WebACL (...): WAFAssociatedItemException: AWS WAF couldn't
 perform the operation because your resource is being used by another resource
 ```
 
-WAFv2 refuses to delete an ACL a distribution still references, so the
-distribution must be updated to drop `web_acl_id` *first*. `cloudfront.tf`
-writes that as `one(aws_wafv2_web_acl.app[*].arn)` rather than a
-`paused ? ... : null` ternary for exactly this reason: the splat still
-references the ACL, so Terraform keeps the dependency edge and orders the
-detach before the destroy. A ternary evaluates to null without naming the
-resource, drops the edge, and lets the delete race ahead of the detach.
+You applied without detaching first. Nothing is broken — the ACL is just still
+attached, and everything else paused fine. Run `./infra/scripts/pause.sh`; it is
+idempotent and will do the detach and finish the apply.
 
-If you still hit it, the detach simply has not propagated yet. Confirm the
-distribution has dropped the ACL and finished deploying, then re-run the apply:
+To check by hand — you want `webacl` empty, `status` `Deployed`, and `modified`
+showing today:
 
 ```bash
 aws cloudfront get-distribution --id E19SHXYWD3PBC5 --profile lessmissed \
-  --query 'Distribution.{status:Status,webacl:DistributionConfig.WebACLId}'
-# want: status "Deployed" and webacl "" — then:
-terraform apply -var paused=true
+  --query 'Distribution.{status:Status,webacl:DistributionConfig.WebACLId,modified:LastModifiedTime}'
 ```
 
-A CloudFront update takes 5–15 minutes to propagate; let the apply sit through
-it rather than interrupting, or the run stops half-done.
+If `modified` has not changed, the distribution was never updated — the detach
+did not run, so retrying the apply will just fail the same way.
+
+`cloudfront.tf` writes the association as `one(aws_wafv2_web_acl.app[*].arn)`
+rather than a `paused ? ... : null` ternary. The splat keeps a real reference to
+the ACL, preserving the dependency edge so the ACL is created and attached in the
+right order on **resume**; a ternary evaluates to null without naming the
+resource and drops the edge entirely. It does not fix the destroy race on pause —
+only detaching first does.
