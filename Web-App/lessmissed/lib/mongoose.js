@@ -42,6 +42,10 @@ export async function connectDB() {
       .connect(MONGODB_URI, {
         bufferCommands: false,
         serverSelectionTimeoutMS: 5000,
+        // The driver default is 100 sockets per process. The web service scales
+        // to 4 tasks, so the default alone can open 400 connections against a
+        // free-tier cluster's 500 limit, before the capture worker asks for any.
+        maxPoolSize: 10,
       })
       .then(async (m) => {
         await ensureTimeseriesCollection(m.connection.db);

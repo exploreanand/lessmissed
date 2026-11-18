@@ -6,6 +6,7 @@ import {
   backfillMissingTemplates,
   finalizeSessionAndRollup,
 } from "@/lib/sessions/finalizeSession";
+import { claimForFinalize, releaseFinalizeClaim, isPoisoned } from "@/lib/sessions/claimSession";
 
 // PATCH /api/tag/sessions/:id
 // Body: { ended_at?, pages_visited?, max_scroll_depth_pct? }
@@ -42,14 +43,39 @@ export async function PATCH(request, { params }) {
 
   const { ended_at, pages_visited, max_scroll_depth_pct } = body;
 
-  const session = await Session.findOne({ session_id });
-  if (!session) return jsonWithCors({ error: "Session not found" }, 404, cors);
+  const existing = await Session.findOne({ session_id }).select("project_id status").lean();
+  if (!existing) return jsonWithCors({ error: "Session not found" }, 404, cors);
   // Same guard as the events route — key from one project must not touch
   // another project's session.
-  if (session.project_id.toString() !== project._id.toString()) {
+  if (existing.project_id.toString() !== project._id.toString()) {
     return jsonWithCors({ error: "Session belongs to a different project" }, 403, cors);
   }
-  if (session.status === "completed") {
+  if (existing.status === "completed") {
+    return jsonWithCors({ ok: true, already_finalized: true }, 200, cors);
+  }
+
+  // Partial checkpoint — journey saved, session stays open. No claim: this does
+  // not finalize anything, and taking the lease here would block a sweep that
+  // is legitimately trying to.
+  if (!ended_at) {
+    const session = await Session.findOne({ session_id });
+    if (!session) return jsonWithCors({ error: "Session not found" }, 404, cors);
+    await applyPagesVisitedUpdate(session, pages_visited);
+    if (max_scroll_depth_pct != null) {
+      session.summary.max_scroll_depth_percent = max_scroll_depth_pct;
+    }
+    await session.save();
+    return jsonWithCors({ ok: true, finalized: false }, 200, cors);
+  }
+
+  // Finalizing. Take the lease rather than re-reading the status we checked
+  // above: that check and the write that follows it are not atomic, so a sweep
+  // claiming the same session in between produced two concurrent finalizes —
+  // a duplicate set of fixations and a double-counted Project.pages
+  // session_count. `endSession` posts with keepalive, which browsers may retry,
+  // so two PATCHes race each other too.
+  const session = await claimForFinalize({ session_id });
+  if (!session) {
     return jsonWithCors({ ok: true, already_finalized: true }, 200, cors);
   }
 
@@ -58,25 +84,27 @@ export async function PATCH(request, { params }) {
     session.summary.max_scroll_depth_percent = max_scroll_depth_pct;
   }
 
-  // Partial checkpoint — journey saved, session stays open.
-  if (!ended_at) {
-    await session.save();
-    return jsonWithCors({ ok: true, finalized: false }, 200, cors);
-  }
-
   await backfillMissingTemplates(session);
 
   if (!session.entry_template && session.pages_visited.length) {
     session.entry_template = session.pages_visited[0].template;
   }
 
-  const { fixation_count, pages_touched } = await finalizeSessionAndRollup(
-    session,
-    new Date(ended_at)
-  );
+  let result;
+  try {
+    result = await finalizeSessionAndRollup(session, new Date(ended_at), {
+      giveUp: isPoisoned(session),
+    });
+  } catch (err) {
+    // Hand it back to the sweeper rather than reporting a finalize that did not
+    // happen. The session stays active and gets retried.
+    console.error(`[finalize] PATCH failed for ${session_id}:`, err.message);
+    await releaseFinalizeClaim(session_id);
+    return jsonWithCors({ error: "Finalize failed; will be retried" }, 503, cors);
+  }
 
   return jsonWithCors(
-    { ok: true, fixation_count, pages: pages_touched },
+    { ok: true, fixation_count: result.fixation_count, pages: result.pages_touched },
     200,
     cors
   );

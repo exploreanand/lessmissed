@@ -18,6 +18,7 @@
 // it under bare Node — the same constraint as pathTemplate.js.
 
 import Fixation from "../models/Fixation.js";
+import { absY } from "../fixationWindows.js";
 import Event from "../models/Event.js";
 import Project from "../models/Project.js";
 import PageCapture from "../models/PageCapture.js";
@@ -225,23 +226,31 @@ export function scoreEngagement({ fixations = [], gazeSamples = [], clickCount =
  * Load a session's data and score it. Called at finalize, after fixations have
  * been derived, and by the backfill.
  */
-export async function computeSessionEngagement(sessionId, projectId) {
+export async function computeSessionEngagement(sessionId, projectId, { gazeEvents: provided } = {}) {
   const [fixations, gazeEvents, clickCount, project] = await Promise.all([
     Fixation.find({ session_id: sessionId })
       .select("center_x center_y element_key element_id page_template page_url start_timestamp")
       .lean(),
-    Event.find({ session_id: sessionId, type: "gaze" })
-      .select("data.y data.scroll_y")
-      .lean(),
+    // Finalize reads the gaze stream once and passes it in; the backfill script
+    // calls this directly, so it still reads for itself when nothing is given.
+    provided ??
+      Event.find({ session_id: sessionId, type: "gaze" })
+        .select("data.y data.viewport_y data.scroll_y")
+        .lean(),
     Event.countDocuments({ session_id: sessionId, type: "click" }),
     projectId ? Project.findById(projectId).select("pages").lean() : null,
   ]);
 
+  // absY, not data.y. The tag writes gaze coordinates as viewport_y + scroll_y
+  // and never sets `y` at all, so reading data.y made Number.isFinite false for
+  // every sample of every tag session: gazeSamples came out empty and
+  // scroll_gaze_correlation — 20% of the score — was permanently zero. Exactly
+  // the bug c791be3 fixed in derivation, in the one place it was missed.
   const gazeSamples = gazeEvents
     .map((e) => {
-      const y = Number(e.data?.y);
+      const docY = absY(e.data ?? {});
       const scrollY = Number(e.data?.scroll_y ?? 0);
-      return Number.isFinite(y) ? { scroll_y: scrollY, doc_y: y + scrollY } : null;
+      return Number.isFinite(docY) ? { scroll_y: scrollY, doc_y: docY } : null;
     })
     .filter(Boolean);
 

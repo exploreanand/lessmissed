@@ -71,8 +71,30 @@ const sessionSchema = new mongoose.Schema(
     // visitor has left (the tag never reliably finalizes on its own). Defaults
     // to session-start so a session with no later events is still sweepable.
     last_activity_at: { type: Date, default: Date.now },
+    // Set when the tag beacons a pagehide that is not a same-site navigation.
+    // A *hint*, not an end time: pagehide also fires for a full-page navigation
+    // within the site, so any later event batch or visit clears it. It lets the
+    // sweeper finalize about a minute after someone leaves instead of waiting
+    // out the 30-minute idle timeout.
+    left_hint_at: { type: Date, default: null },
+    // Finalize lease. Held while a sweeper or the tag's own stop is doing the
+    // work; status stays "active" until that work has actually finished, so an
+    // interrupted finalize is retried rather than lost. Previously the sweeper
+    // claimed a session by flipping it straight to "completed", which meant a
+    // process that died mid-derivation left the session completed with zero
+    // fixations and invisible to every later sweep.
+    finalize_lease_until: { type: Date, default: null },
+    finalize_attempts: { type: Number, default: 0 },
+    // Set once the session has been rolled up onto Project.pages. The rollup
+    // uses $inc, so a retried finalize would otherwise double-count the page.
+    rolled_up_at: { type: Date, default: null },
     summary: {
+      // Derived fixations, written at finalize. Not the raw gaze sample count —
+      // that is total_gaze_samples. The ingest route used to $inc this field
+      // with the sample count, so the session view showed ~10 "fixations" per
+      // second of looking.
       total_fixations: { type: Number, default: 0 },
+      total_gaze_samples: { type: Number, default: 0 },
       total_clicks: { type: Number, default: 0 },
       total_scroll_events: { type: Number, default: 0 },
       max_scroll_depth_percent: { type: Number, default: 0 },
@@ -93,5 +115,8 @@ sessionSchema.index({ task_id: 1 });
 sessionSchema.index({ project_id: 1, "pages_visited.template": 1 });
 // The idle-session sweeper scans active sessions oldest-activity-first.
 sessionSchema.index({ status: 1, last_activity_at: 1 });
+// The leave-hint sweep runs as its own query rather than a third $or arm, so it
+// gets a real index rather than an index union.
+sessionSchema.index({ status: 1, left_hint_at: 1 });
 
 export default mongoose.models.Session || mongoose.model("Session", sessionSchema);

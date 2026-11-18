@@ -6,7 +6,7 @@ import Session from "../models/Session.js";
 import Project from "../models/Project.js";
 import Event from "../models/Event.js";
 import Fixation from "../models/Fixation.js";
-import { deriveFixations } from "../deriveFixations.js";
+import { deriveFixations, loadGazeEvents } from "../deriveFixations.js";
 import { computeSessionEngagement } from "../insights/engagement.js";
 import { normalizePath, findMatchingPage } from "../pathTemplate.js";
 
@@ -90,9 +90,40 @@ export async function attributeVisitCounters(sessionId, visits, endedAt) {
  * ones before calling this.
  *
  * Returns { fixation_count, pages_touched } for the response body.
+ *
+ * Throws if fixation derivation fails, leaving the session active and
+ * re-sweepable — unless `giveUp` is set, which the callers pass once a session
+ * has burned through MAX_FINALIZE_ATTEMPTS.
  */
-export async function finalizeSessionAndRollup(session, endedAtDate) {
+export async function finalizeSessionAndRollup(session, endedAtDate, { giveUp = false } = {}) {
   const endedAt = endedAtDate;
+
+  // The derived work first, before anything is persisted. A failure here must
+  // leave the session untouched and still "active", so the lease expires and
+  // the next sweep retries it — the whole point of claiming with a lease rather
+  // than by writing "completed" up front.
+  //
+  // One read of the gaze stream, handed to both consumers. Derivation and the
+  // engagement scorer used to issue the same query separately, which on a long
+  // session is two scans of tens of thousands of time-series documents.
+  let fixation_count = 0;
+  let gazeEvents = [];
+  try {
+    gazeEvents = await loadGazeEvents(session.session_id);
+    fixation_count = await deriveFixations(
+      session.session_id,
+      session.project_id.toString(),
+      { gazeEvents }
+    );
+  } catch (err) {
+    if (!giveUp) throw err;
+    // Out of attempts. Complete the session anyway so it stops cycling, and be
+    // loud about the fact that its gaze data is unusable.
+    console.error(
+      `[deriveFixations] giving up on session ${session.session_id} after repeated failures:`,
+      err.message
+    );
+  }
 
   // Close whatever page they were on when they stopped.
   const open = [...session.pages_visited].reverse().find((v) => !v.left_at);
@@ -104,22 +135,8 @@ export async function finalizeSessionAndRollup(session, endedAtDate) {
     session.exit_template = session.pages_visited.at(-1).template;
   }
 
-  session.status = "completed";
-  session.ended_at = endedAt;
-  session.duration_ms = Math.max(0, endedAt - new Date(session.started_at));
-
-  // Fixations first — per-visit fixation_count reads straight out of the
-  // collection this writes.
-  let fixation_count = 0;
-  try {
-    fixation_count = await deriveFixations(
-      session.session_id,
-      session.project_id.toString()
-    );
-  } catch (err) {
-    console.error("[deriveFixations] failed for session", session.session_id, err.message);
-  }
-
+  // Per-visit fixation_count reads straight out of the collection derivation
+  // just wrote, so this has to come after it.
   try {
     await attributeVisitCounters(session.session_id, session.pages_visited, endedAt);
   } catch (err) {
@@ -127,11 +144,13 @@ export async function finalizeSessionAndRollup(session, endedAtDate) {
   }
 
   // Engagement score, SRS §6 — computed here, after fixations exist, because
-  // four of its five signals are read from them.
+  // four of its five signals are read from them. Non-fatal: a session with
+  // fixations but no engagement score is still worth completing.
   try {
     const { score, breakdown } = await computeSessionEngagement(
       session.session_id,
-      session.project_id.toString()
+      session.project_id.toString(),
+      { gazeEvents }
     );
     session.engagement_score = score;
     session.engagement_breakdown = breakdown;
@@ -139,7 +158,13 @@ export async function finalizeSessionAndRollup(session, endedAtDate) {
     console.error("[engagement] failed for session", session.session_id, err.message);
   }
 
-  await session.save();
+  session.status = "completed";
+  session.ended_at = endedAt;
+  session.duration_ms = Math.max(0, endedAt - new Date(session.started_at));
+  // The real count, not the raw gaze sample tally the ingest route used to put
+  // here (that now lives in summary.total_gaze_samples).
+  session.summary.total_fixations = fixation_count;
+  session.finalize_lease_until = null;
 
   // Roll the session up onto each distinct page it touched. Matching on
   // template rather than raw path is what makes this correct across a site:
@@ -148,27 +173,44 @@ export async function finalizeSessionAndRollup(session, endedAtDate) {
     ...new Set(session.pages_visited.map((p) => p.template).filter(Boolean)),
   ];
 
-  await Promise.all(
-    templates.flatMap((template) => [
-      Project.updateOne(
-        { _id: session.project_id, "pages.path": template },
-        {
-          $inc: { "pages.$.session_count": 1 },
-          $set: { "pages.$.last_session_at": endedAt },
-        }
-      ),
-      // Discovered pages sit at "awaiting_data" until a completed session
-      // exists for them. Scoped to that status so this never resurrects a
-      // page a client deliberately paused.
-      Project.updateOne(
-        {
-          _id: session.project_id,
-          pages: { $elemMatch: { path: template, status: "awaiting_data" } },
-        },
-        { $set: { "pages.$.status": "active" } }
-      ),
-    ])
-  );
+  // $inc, so this must happen at most once per session however many times
+  // finalize runs. A retry after an interrupted finalize would otherwise
+  // inflate every page's session_count.
+  //
+  // The flag is written with the session, before the rollup, which means a
+  // crash in the gap under-counts one session rather than double-counting it.
+  // That direction is deliberate: a count that is occasionally one low is a
+  // far smaller lie than one that grows every time a session is retried, and
+  // closing the gap properly needs a transaction, which rules out the
+  // standalone mongod everyone develops against.
+  const alreadyRolledUp = Boolean(session.rolled_up_at);
+  if (!alreadyRolledUp) session.rolled_up_at = endedAt;
+
+  await session.save();
+
+  if (!alreadyRolledUp) {
+    await Promise.all(
+      templates.flatMap((template) => [
+        Project.updateOne(
+          { _id: session.project_id, "pages.path": template },
+          {
+            $inc: { "pages.$.session_count": 1 },
+            $set: { "pages.$.last_session_at": endedAt },
+          }
+        ),
+        // Discovered pages sit at "awaiting_data" until a completed session
+        // exists for them. Scoped to that status so this never resurrects a
+        // page a client deliberately paused.
+        Project.updateOne(
+          {
+            _id: session.project_id,
+            pages: { $elemMatch: { path: template, status: "awaiting_data" } },
+          },
+          { $set: { "pages.$.status": "active" } }
+        ),
+      ])
+    );
+  }
 
   return { fixation_count, pages_touched: templates.length };
 }
