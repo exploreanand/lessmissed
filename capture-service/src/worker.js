@@ -18,15 +18,26 @@ let lastSweepAt = 0;
 
 // Finalize sessions whose visitors have left (see sweepIdleSessions). Throttled
 // to sessionSweepIntervalMs and run inline in the main loop so it shares this
-// worker's single DB connection and never competes for a render slot. The
-// worker is single-instance, which is why this needs no cross-process lock.
+// worker's single DB connection and never competes for a render slot.
+//
+// The web app runs this same sweep, on longer thresholds, so that a Spot
+// reclaim of this task cannot stop finalization altogether. Overlap is safe:
+// each session is claimed with a lease before any work is done, so whichever
+// process gets there first does it exactly once.
 async function maybeSweepSessions() {
   if (config.sessionSweepIntervalMs <= 0) return;
   if (Date.now() - lastSweepAt < config.sessionSweepIntervalMs) return;
   lastSweepAt = Date.now();
   try {
-    const n = await sweepIdleSessions({ idleMs: config.sessionIdleMs });
-    if (n) console.log(`[capture] finalized ${n} idle session(s)`);
+    const { finalized, byLeave, byIdle } = await sweepIdleSessions({
+      idleMs: config.sessionIdleMs,
+      leaveGraceMs: config.sessionLeaveGraceMs,
+    });
+    if (finalized) {
+      console.log(
+        `[capture] finalized ${finalized} session(s) — ${byLeave} left, ${byIdle} idle`
+      );
+    }
   } catch (err) {
     console.error(`[capture] session sweep error: ${err.message}`);
   }

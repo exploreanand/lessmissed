@@ -132,6 +132,15 @@ export async function POST(request) {
   if (!session.entry_template) session.entry_template = template;
   session.exit_template = template;
 
+  // A navigation is activity. Only the events route used to refresh this, so a
+  // session whose event POSTs were failing while its navigations succeeded got
+  // swept as idle. It also cancels a leave hint: a pagehide followed by a visit
+  // is a same-site navigation, not someone leaving — and because this lands as
+  // soon as the next page boots, long before gaze starts streaming, it is what
+  // makes a short leave grace safe.
+  session.last_activity_at = new Date();
+  session.left_hint_at = null;
+
   await session.save();
 
   return jsonWithCors(

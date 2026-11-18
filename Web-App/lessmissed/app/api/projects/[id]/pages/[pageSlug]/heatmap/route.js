@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import Fixation from "@/lib/models/Fixation";
+import Session from "@/lib/models/Session";
 import Event from "@/lib/models/Event";
 import { computeFirstFixation } from "@/lib/insights/firstFixation";
 import { getSessionUser } from "@/lib/auth/session";
@@ -36,9 +37,22 @@ export async function GET(request, { params }) {
   let points = [];
 
   if (type === "gaze") {
+    // Exclude sessions that are still running, matching every other insight,
+    // all of which scope to status "completed". Expressed as "not active"
+    // rather than "in this list of completed ids" on purpose: the active set is
+    // a handful of rows and {project_id, status} is indexed, where the
+    // completed set grows without bound and would mean a huge $in on every
+    // heatmap request.
+    const active = await Session.find(
+      { project_id: id, status: "active" },
+      { session_id: 1 }
+    ).lean();
+    const activeIds = active.map((s) => s.session_id);
+
     const fixations = await Fixation.find({
       project_id: id,
       ...pageFilter,
+      ...(activeIds.length ? { session_id: { $nin: activeIds } } : {}),
       ...(Object.keys(dateFilter).length ? { start_timestamp: dateFilter } : {}),
     })
       .select("center_x center_y duration_ms")

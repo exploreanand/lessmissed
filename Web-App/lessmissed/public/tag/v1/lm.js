@@ -69,6 +69,7 @@
   var BATCH_MAX_SIZE = 50;
   var OFFLINE_MAX = 2000;
   var SESSION_IDLE_MS = 30 * 60 * 1000; // 30 min inactivity ends session
+  var RESET_COOLDOWN_MS = 30 * 1000; // floor between re-boots after a dead session
   var GAZE_FPS = 10;
   var CURSOR_FPS = 8;
   var SCROLL_FPS = 4;
@@ -241,6 +242,14 @@
       if (!msg || !msg.data) return;
       if (msg.data.type === 'session') session = msg.data.session;
       if (msg.data.type === 'stop') endSession('other_tab');
+      // A sibling tab is closing and has told the server the visitor left.
+      // We're still here, so say so — otherwise the server finalizes a session
+      // this tab is still recording into. A hidden tab can't rely on its own
+      // event flush to do this: WebGazer's rAF loop stalls while hidden, so
+      // there may be nothing queued to send.
+      if (msg.data.type === 'tab_closing' && session) {
+        postVisit(currentUrl(), location.href, null);
+      }
     };
   } catch (_) { /* older browser without BroadcastChannel — degrade to storage events */ }
 
@@ -375,7 +384,11 @@
       keepalive: true,
       credentials: 'omit',
     }).then(function (res) {
-      if (res.status === 404 || res.status === 409) return; // dead session — drop
+      // The session is gone or already finalized server-side. Dropping the
+      // batch is right — nothing will ever derive it — but carrying on with a
+      // dead session id means everything after this is dropped too, silently.
+      // Start a fresh session and keep recording.
+      if (res.status === 404 || res.status === 409) { resetSession(); return; }
       if (!res.ok) enqueueOffline(batch);
     }).catch(function () { enqueueOffline(batch); });
   }
@@ -491,16 +504,43 @@
 
   // pagehide is the last message point before a hard navigation or tab
   // close. beforeunload is not fireable on mobile Safari — pagehide is what
-  // covers both cases. Post the queue via sendBeacon and PATCH the session
-  // shutdown from the same event so nothing is dropped.
-  window.addEventListener('pagehide', function () {
+  // covers both cases. Post the queue via sendBeacon, and tell the server the
+  // visitor may have left, from the same event so nothing is dropped.
+  window.addEventListener('pagehide', function (e) {
     if (!session) return;
+    // persisted means the page went into the back/forward cache rather than
+    // away: it can be restored, live, minutes later. Reporting a leave here
+    // would have the server finalize a session that is about to resume.
+    if (e && e.persisted) return;
+
     flushBatch(true);
-    // Whether to fully finalize on pagehide is a judgement call: a full-page
-    // navigation to another page of the same site means the session should
-    // continue on the next load, so we don't PATCH ended_at here — the visit
-    // recorder on the next page will resume. If the user is leaving the
-    // site entirely, the session will time out server-side.
+
+    // We still don't PATCH ended_at: a full-page navigation within the site
+    // fires pagehide too, and that session should continue on the next load.
+    // Instead tell the server the visitor *may* have left and let it decide.
+    // The next page's visit POST clears the hint within a second or so; if
+    // nothing clears it, the sweeper finalizes after its grace period instead
+    // of waiting out the 30-minute idle timeout. Separate from flushBatch
+    // because that returns early when the queue is empty, which is exactly
+    // when this signal matters most.
+    try {
+      var leaveUrl = API_BASE + '/api/tag/events?leaving=1&key=' + encodeURIComponent(API_KEY);
+      var leaveBody = JSON.stringify({ session_id: session.session_id, events: [] });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(leaveUrl, new Blob([leaveBody], { type: 'application/json' }));
+      } else {
+        fetch(leaveUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: leaveBody,
+          keepalive: true,
+          credentials: 'omit',
+        }).catch(function () {});
+      }
+    } catch (_) { /* leaving is best-effort; the idle timeout still covers it */ }
+
+    // Another tab may share this session and still be live.
+    if (channel) try { channel.postMessage({ type: 'tab_closing' }); } catch (_) {}
   });
 
   // ── SPA route detection ─────────────────────────────────────────────────
@@ -556,7 +596,26 @@
       }),
       credentials: 'omit',
       keepalive: true,
+    }).then(function (res) {
+      // 409 means the server finalized this session while we were still on the
+      // page — a leave hint we didn't manage to clear in time. Start a new one
+      // rather than posting into a session nothing will look at again.
+      if (res.status === 404 || res.status === 409) resetSession();
     }).catch(function () { /* non-fatal — visit will be reconstructed from events */ });
+  }
+
+  // Abandon a session the server no longer accepts and boot a fresh one.
+  // Rate-limited: if the new session is also rejected we must not spin.
+  var lastResetAt = 0;
+  function resetSession() {
+    if (Date.now() - lastResetAt < RESET_COOLDOWN_MS) return;
+    lastResetAt = Date.now();
+    queue.length = 0;
+    teardownWebGazer();
+    stopBatchTimer();
+    session = null;
+    saveSession(null);
+    maybeBoot();
   }
 
   // ── Session lifecycle ───────────────────────────────────────────────────

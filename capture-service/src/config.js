@@ -33,12 +33,22 @@ export const config = {
   // this is the latency an admin sees between clicking and the render starting.
   pollIntervalMs: num("CAPTURE_POLL_INTERVAL_MS", 2000),
 
-  // Idle-session finalization. A visitor who just leaves never finalizes their
-  // session client-side, so the worker finalizes any session with no ingest for
-  // sessionIdleMs (matches the tag's own SESSION_IDLE_MS), sweeping this often.
+  // Session finalization. A visitor who just leaves never finalizes their
+  // session client-side, so this worker does it for them — two ways:
+  //
+  //   sessionLeaveGraceMs  after the tag's pagehide beacon marks the session as
+  //                        left. Short, because any event or navigation from the
+  //                        next page clears the hint. This is the normal path.
+  //   sessionIdleMs        after total silence (matches the tag's own
+  //                        SESSION_IDLE_MS). The backstop for a leave hint that
+  //                        never arrived.
+  //
+  // The web app runs the same sweep with deliberately longer thresholds, so it
+  // only picks up what this worker missed. Keep these the shorter pair.
   // Set CAPTURE_SESSION_SWEEP_INTERVAL_MS=0 to disable the sweep entirely.
   sessionIdleMs: num("SESSION_IDLE_MS", 30 * 60 * 1000),
-  sessionSweepIntervalMs: num("CAPTURE_SESSION_SWEEP_INTERVAL_MS", 5 * 60 * 1000),
+  sessionLeaveGraceMs: num("SESSION_LEAVE_GRACE_MS", 60 * 1000),
+  sessionSweepIntervalMs: num("CAPTURE_SESSION_SWEEP_INTERVAL_MS", 30 * 1000),
 
   // Per-phase render budgets. Navigation is the one that actually trips on slow
   // sites; the rest are generous and exist so a hung page cannot hold a slot.

@@ -104,6 +104,10 @@ No separate `.env` is needed: `npm start` reads `../Web-App/lessmissed/.env.loca
 | `AWS_SECRET_ACCESS_KEY` | ✅ | S3 credentials |
 | `EVENTS_TTL_DAYS` | | Days to keep raw events (default `90`) |
 | `LM_LABEL_SERVICE_URL` | | Label service address (default `http://127.0.0.1:8077`) |
+| `WEB_SESSION_SWEEP` | | Set `0` to stop the web app finalizing sessions (default on) |
+| `WEB_SWEEP_INTERVAL_MS` | | How often it checks (default `30000`) |
+| `WEB_SWEEP_LEAVE_GRACE_MS` | | Wait this long after a visitor leaves (default `90000`) |
+| `WEB_SWEEP_IDLE_MS` | | Silence before finalizing anyway (default 45 min) |
 
 `.env.example` has all of these with comments.
 
@@ -156,6 +160,21 @@ Screenshots are taken **on the server**, by the capture service, and only of the
 - Jobs are leased from MongoDB, so a worker can crash mid-capture without losing anything: the job goes back in the queue and runs again.
 
 `capture-service/README.md` has the full details.
+
+### When a session ends
+
+A visitor who closes the tab can't tell the server they've gone — `pagehide`
+fires for an ordinary same-site navigation too. So the tag sends it as a *hint*
+and the server decides: if nothing from the next page clears that hint within a
+minute or so, the session is finalized and its fixations, engagement score and
+page rollups are computed. A session whose hint never arrives at all — a crashed
+tab, a killed browser — is finalized after 30 minutes of silence.
+
+Both the web app and the capture service run that sweep, on different
+thresholds, so finalization keeps working when either one is down. Whichever
+gets there first takes a lease on the session, and the session is only marked
+completed once the work has actually succeeded — an interrupted finalize is
+retried rather than lost.
 
 ### Site-wide tracking
 
