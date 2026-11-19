@@ -368,10 +368,20 @@
       // sendBeacon is the only way to reliably post from unload — but it
       // doesn't set custom headers, so the API key rides in the URL. The
       // route accepts both; see extractApiKey().
+      //
+      // text/plain, not application/json, and this matters: the Blob's type
+      // becomes the Content-Type, and application/json is not CORS-safelisted,
+      // so it forces a preflight (lib/tag/cors.js says as much). The preflight
+      // cache is keyed by URL and this URL carries ?key=, so it is always a
+      // cold OPTIONS — issued exactly as the page is being torn down, which is
+      // when a beacon whose preflight has not returned is dropped silently.
+      // With a safelisted type and no custom headers this is a simple request
+      // that goes out immediately. The route reads the body with
+      // request.json(), which does not inspect Content-Type.
       try {
         var ok = navigator.sendBeacon(
           API_BASE + '/api/tag/events?key=' + encodeURIComponent(API_KEY),
-          new Blob([body], { type: 'application/json' })
+          new Blob([body], { type: 'text/plain' })
         );
         if (ok) return;
       } catch (_) { /* fall through to fetch */ }
@@ -526,8 +536,9 @@
     try {
       var leaveUrl = API_BASE + '/api/tag/events?leaving=1&key=' + encodeURIComponent(API_KEY);
       var leaveBody = JSON.stringify({ session_id: session.session_id, events: [] });
+      // text/plain keeps this a simple CORS request — see flushBatch above.
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(leaveUrl, new Blob([leaveBody], { type: 'application/json' }));
+        navigator.sendBeacon(leaveUrl, new Blob([leaveBody], { type: 'text/plain' }));
       } else {
         fetch(leaveUrl, {
           method: 'POST',
