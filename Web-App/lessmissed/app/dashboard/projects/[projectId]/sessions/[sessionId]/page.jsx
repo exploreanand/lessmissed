@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import Session from "@/lib/models/Session";
+import { describeGazeStatus } from "@/lib/gaze/gazeStatus";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import HealthBadge from "../../../../../components/dashboard/HealthBadge";
 import ReplayPlayer from "./ReplayPlayer";
@@ -34,6 +35,10 @@ export default async function SessionReplayPage({ params }) {
   }).lean();
 
   if (!session) notFound();
+
+  // Null when gaze ran normally, or when the tag never reported — in both of
+  // those cases the fixation count is the honest thing to show.
+  const gazeUnavailable = describeGazeStatus(session.gaze_status);
 
   // The full journey, not just a list of paths. Every page the consumer reached
   // records its own dwell, fixations and clicks, so the ordered trip through the
@@ -181,7 +186,13 @@ export default async function SessionReplayPage({ params }) {
               <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Session summary</h3>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: "Fixations", value: session.summary.total_fixations ?? 0 },
+                  // A zero here is only meaningful if gaze actually ran. When it
+                  // didn't, say why instead — "0" reads as a measurement, and
+                  // telling "nobody looked" apart from "the camera never saw a
+                  // face" otherwise means querying the database by hand.
+                  gazeUnavailable
+                    ? { label: "Gaze", value: gazeUnavailable, muted: true }
+                    : { label: "Fixations", value: session.summary.total_fixations ?? 0 },
                   { label: "Clicks", value: session.summary.total_clicks ?? 0 },
                   { label: "Scroll depth", value: `${Math.round(session.summary.max_scroll_depth_percent ?? 0)}%` },
                   { label: "Rage clicks", value: session.summary.rage_clicks ?? 0 },
@@ -189,7 +200,15 @@ export default async function SessionReplayPage({ params }) {
                   { label: "Scroll-backs", value: session.summary.scroll_backs ?? 0 },
                 ].map((stat) => (
                   <div key={stat.label} className="rounded-xl bg-zinc-50 dark:bg-zinc-800 p-2.5 text-center">
-                    <p className="text-base font-bold text-zinc-900 dark:text-zinc-50">{stat.value}</p>
+                    <p
+                      className={
+                        stat.muted
+                          ? "text-[11px] font-semibold leading-tight text-amber-600 dark:text-amber-500"
+                          : "text-base font-bold text-zinc-900 dark:text-zinc-50"
+                      }
+                    >
+                      {stat.value}
+                    </p>
                     <p className="text-[9px] text-zinc-400 uppercase tracking-wide mt-0.5">{stat.label}</p>
                   </div>
                 ))}

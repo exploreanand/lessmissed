@@ -3,6 +3,7 @@ import Event from "@/lib/models/Event";
 import Session from "@/lib/models/Session";
 import { normalizePath } from "@/lib/pathTemplate";
 import { handleTagPreflight, authenticateTagRequest, jsonWithCors } from "@/lib/tag/cors";
+import { normalizeGazeReport } from "@/lib/gaze/gazeStatus";
 
 // POST /api/tag/events
 // Body: { session_id, events: [{ timestamp, type, page_url, data }] }
@@ -41,7 +42,7 @@ export async function POST(request) {
     : null;
   const leaving = leavingKind !== null;
 
-  const { session_id, events } = body;
+  const { session_id, events, gaze } = body;
   if (!session_id || !Array.isArray(events)) {
     return jsonWithCors(
       { error: "session_id and an events array are required" },
@@ -139,6 +140,18 @@ export async function POST(request) {
   } else {
     // More events means they are still here.
     update.$unset = { left_hint_at: "", left_hint_kind: "" };
+  }
+
+  // The tag ships its gaze counters on batches it was already sending, so this
+  // costs no extra request. The server decides what they mean rather than
+  // trusting a status from the client — see lib/gaze/gazeStatus.js.
+  const gazeReport = normalizeGazeReport(gaze);
+  if (gazeReport) {
+    // Only overwrite a known status with another known one: a late batch with
+    // nothing to say must not erase "blocked" recorded a moment earlier.
+    if (gazeReport.status) update.$set.gaze_status = gazeReport.status;
+    update.$set.gaze_blocked_reason = gazeReport.blocked_reason;
+    update.$set.gaze_counts = gazeReport.counts;
   }
 
   const filter = { session_id };

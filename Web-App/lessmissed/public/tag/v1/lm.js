@@ -114,9 +114,20 @@
       teardownWebGazer();
     },
     status: function () {
+      // `gaze` used to be webgazerReady alone, which was actively misleading:
+      // it only means begin() resolved, so a camera pointed at the ceiling
+      // reported gaze: true while producing nothing. The counters are the
+      // answer — predictions 0 with nulls climbing is "no face in view".
       return {
         session: session,
         gaze: !!webgazerReady,
+        gaze_predictions: gazePredictions,
+        gaze_nulls: gazeNulls,
+        gaze_dropped_outlier: gazeDroppedOutlier,
+        gaze_seconds_since_prediction: gazeLastPredictionAt
+          ? Math.round((Date.now() - gazeLastPredictionAt) / 1000)
+          : null,
+        gaze_blocked_reason: gazeBlockedReason,
         queue: queue.length,
         consent: consentGranted,
       };
@@ -362,7 +373,13 @@
   function flushBatch(useBeacon) {
     if (!session || !queue.length) return;
     var batch = queue.splice(0);
-    var body = JSON.stringify({ session_id: session.session_id, events: batch });
+    // gaze rides along on a request already going out, so reporting it costs
+    // no extra round trip.
+    var body = JSON.stringify({
+      session_id: session.session_id,
+      events: batch,
+      gaze: gazeReport(),
+    });
 
     if (useBeacon && navigator.sendBeacon) {
       // sendBeacon is the only way to reliably post from unload — but it
@@ -416,7 +433,11 @@
     try {
       var url = API_BASE + '/api/tag/events?leaving=' + kind +
         '&key=' + encodeURIComponent(API_KEY);
-      var body = JSON.stringify({ session_id: session.session_id, events: [] });
+      var body = JSON.stringify({
+        session_id: session.session_id,
+        events: [],
+        gaze: gazeReport(),
+      });
       if (navigator.sendBeacon) {
         navigator.sendBeacon(url, new Blob([body], { type: 'text/plain' }));
       } else {
@@ -821,8 +842,11 @@
       })
       .catch(function (err) {
         // Camera denied, model load failed, etc. Tag continues without gaze
-        // — click/scroll/cursor insights still function.
-        console.warn('[LessMissed] gaze disabled:', err && err.message);
+        // — click/scroll/cursor insights still function. The reason is
+        // reported to the server too, so the dashboard can say which it was
+        // rather than showing a bare zero.
+        gazeBlockedReason = (err && err.message) || 'gaze unavailable';
+        console.warn('[LessMissed] gaze disabled:', gazeBlockedReason);
         webgazerReady = false;
       });
   }
@@ -840,9 +864,42 @@
   var gazeBuf = [];
   var GAZE_BUF = 6;
   var lastGazeAt = 0;
+
+  // Why this session has the gaze data it has.
+  //
+  // WebGazer calls the listener on every animation frame and hands over null
+  // whenever it has no prediction, so "camera running but no face in view"
+  // used to look exactly like "gaze never started" — both simply produced no
+  // events, and the session showed 0 fixations either way. Counting the nulls
+  // is what tells them apart. The server decides what the numbers mean; see
+  // Web-App/lessmissed/lib/gaze/gazeStatus.js.
+  var gazePredictions = 0;
+  var gazeNulls = 0;
+  var gazeDroppedOutlier = 0;
+  var gazeLastPredictionAt = 0;
+  var gazeBlockedReason = null;
+
+  function gazeReport() {
+    return {
+      enabled: !!gazeEnabled,
+      ready: !!webgazerReady,
+      blocked_reason: gazeBlockedReason,
+      predictions: gazePredictions,
+      nulls: gazeNulls,
+      dropped_outlier: gazeDroppedOutlier,
+    };
+  }
+
   function onGaze(data) {
-    if (!data || !session) return;
-    var now = Date.now();
+    // A null prediction is information, not noise: it means WebGazer is
+    // running and finding no face. Counted before the session check, because
+    // the camera's state does not depend on whether we have a session yet.
+    if (!data) { gazeNulls++; return; }
+    gazePredictions++;
+    gazeLastPredictionAt = Date.now();
+
+    if (!session) return;
+    var now = gazeLastPredictionAt;
     if (now - lastGazeAt < 1000 / GAZE_FPS) return;
     lastGazeAt = now;
 
@@ -856,7 +913,12 @@
     // Outlier rejection — one wild sample shouldn't drag the mean if the
     // rest are stable. Distance > 200px from moving mean is dropped.
     var dx = data.x - mx, dy = data.y - my;
-    if (dx * dx + dy * dy > 200 * 200 && gazeBuf.length >= 3) return;
+    if (dx * dx + dy * dy > 200 * 200 && gazeBuf.length >= 3) {
+      // Counted separately from nulls: if this ever dominates, the camera is
+      // fine and the calibration is bad, which is a different fix.
+      gazeDroppedOutlier++;
+      return;
+    }
 
     var pageX = Math.round(mx + window.scrollX);
     var pageY = Math.round(my + window.scrollY);

@@ -46,6 +46,31 @@ const sessionSchema = new mongoose.Schema(
     // bucket rather than against one arbitrary desktop render.
     breakpoint: { type: String, enum: ["desktop", "mobile"], default: "desktop" },
 
+    // Why this session has the gaze data it has — see lib/gaze/gazeStatus.js.
+    //
+    // Conditions metadata, like viewport_width above: it records what the
+    // recording environment was, so a zero can be read correctly afterwards.
+    // Without it "0 fixations" is the same number whether nobody looked, the
+    // camera was refused, the models failed, or WebGazer never found a face,
+    // and the only way to tell was to query the events collection by hand.
+    //
+    // Null means the tag never reported, which is itself distinct from "ok".
+    gaze_status: {
+      type: String,
+      enum: ["ok", "no_face", "blocked", "off", null],
+      default: null,
+    },
+    // The error webgazer.begin() rejected with, when status is "blocked".
+    gaze_blocked_reason: { type: String, default: null },
+    // Raw counters behind the status. `nulls` is WebGazer reporting no
+    // prediction for a frame; `dropped_outlier` is our own >200px rejection in
+    // the tag, which is a calibration signal rather than a camera one.
+    gaze_counts: {
+      predictions: { type: Number, default: 0 },
+      nulls: { type: Number, default: 0 },
+      dropped_outlier: { type: Number, default: 0 },
+    },
+
     pages_visited: { type: [pageVisitSchema], default: [] },
     // Denormalised first and last page of the journey, so the flow graph can
     // count entries and exits without unwinding every session's visit array.
