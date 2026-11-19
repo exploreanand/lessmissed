@@ -114,16 +114,18 @@
       teardownWebGazer();
     },
     status: function () {
-      // `gaze` used to be webgazerReady alone, which was actively misleading:
-      // it only means begin() resolved, so a camera pointed at the ceiling
-      // reported gaze: true while producing nothing. The counters are the
-      // answer — predictions 0 with nulls climbing is "no face in view".
+      // Named gaze_ready, not gaze: it only means begin() resolved, so a
+      // camera pointed at the ceiling still reports true. Read the counters
+      // instead — predictions 0 with nulls climbing is no usable gaze, and
+      // training_clicks 0 alongside that says why: an untrained regression
+      // returns null on every frame no matter how good the camera is.
       return {
         session: session,
-        gaze: !!webgazerReady,
+        gaze_ready: !!webgazerReady,
         gaze_predictions: gazePredictions,
         gaze_nulls: gazeNulls,
         gaze_dropped_outlier: gazeDroppedOutlier,
+        gaze_training_clicks: gazeTrainingClicks,
         gaze_seconds_since_prediction: gazeLastPredictionAt
           ? Math.round((Date.now() - gazeLastPredictionAt) / 1000)
           : null,
@@ -497,14 +499,21 @@
         is_interactive: MIN_INTERACTIVE_TAGS.has(desc.element_tag),
       },
     });
-    // Click-based recalibration for WebGazer — same trick as the extension.
+    // Click-based recalibration for WebGazer.
+    //
+    // Viewport coordinates, NOT page coordinates. WebGazer's regression both
+    // trains and predicts in the viewport frame — onGaze below proves it, since
+    // it adds window.scrollX back to data.x to get a page coordinate, and feeds
+    // data.x straight to elementFromPoint, which is viewport-only. Training
+    // with clientY + scrollY taught it "these eye features mean y=2300" on a
+    // page whose viewport is 900 tall, so every click below the fold pushed the
+    // model further from reality. With saveDataAcrossSessions that damage is
+    // persisted per origin and reloaded into every later visit, which is how a
+    // profile degrades to zero usable predictions and never recovers.
     if (webgazerReady && window.webgazer) {
       try {
-        window.webgazer.recordScreenPosition(
-          e.clientX + window.scrollX,
-          e.clientY + window.scrollY,
-          'click'
-        );
+        window.webgazer.recordScreenPosition(e.clientX, e.clientY, 'click');
+        gazeTrainingClicks++;
       } catch (_) {}
     }
   }, { capture: true });
@@ -813,6 +822,27 @@
     });
   }
 
+  // WebGazer persists its trained regression per origin (saveDataAcrossSessions)
+  // and reloads it into every later visit, so a model trained by a buggy tag
+  // outlives the fix that corrects the bug. Tags before v2 trained on page
+  // coordinates instead of viewport ones, which on any scrolled page taught the
+  // regression points far outside the screen; a visitor carrying such a model
+  // would keep getting null predictions forever no matter how good their camera
+  // is. Drop it exactly once, then let clean clicks rebuild it.
+  var CALIBRATION_VERSION = '2';
+  var CALIBRATION_VERSION_KEY = 'lm_calib_v';
+
+  function calibrationNeedsReset() {
+    // A throwing localStorage means nothing was ever persisted, so there is
+    // nothing poisoned to clear.
+    try { return localStorage.getItem(CALIBRATION_VERSION_KEY) !== CALIBRATION_VERSION; }
+    catch (_) { return false; }
+  }
+
+  function markCalibrationReset() {
+    try { localStorage.setItem(CALIBRATION_VERSION_KEY, CALIBRATION_VERSION); } catch (_) {}
+  }
+
   function initWebGazer() {
     if (!gazeEnabled || webgazerReady) return;
     // Patch fetch BEFORE webgazer's script loads — begin() may fire model
@@ -829,6 +859,18 @@
           webgazer.showFaceOverlay(false);
           webgazer.showFaceFeedbackBox(false);
           webgazer.setGazeListener(onGaze);
+          // Must happen before begin(), which is what reads the stored model
+          // back in. Never let a failed clear block gaze — a stale model still
+          // beats no gaze at all.
+          if (calibrationNeedsReset()) {
+            return Promise.resolve()
+              .then(function () { return webgazer.clearData(); })
+              .catch(function () {})
+              .then(function () {
+                markCalibrationReset();
+                return webgazer.begin();
+              });
+          }
           return webgazer.begin();
         } catch (err) {
           throw err;
@@ -878,6 +920,10 @@
   var gazeDroppedOutlier = 0;
   var gazeLastPredictionAt = 0;
   var gazeBlockedReason = null;
+  // Clicks actually fed to the regression. Zero of these means predict() can
+  // only ever return null, which is a calibration problem wearing the costume
+  // of a camera problem — see lib/gaze/gazeStatus.js.
+  var gazeTrainingClicks = 0;
 
   function gazeReport() {
     return {
@@ -887,6 +933,7 @@
       predictions: gazePredictions,
       nulls: gazeNulls,
       dropped_outlier: gazeDroppedOutlier,
+      training_clicks: gazeTrainingClicks,
     };
   }
 

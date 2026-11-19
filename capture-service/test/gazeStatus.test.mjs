@@ -88,7 +88,12 @@ test("counters from the tag are treated as untrusted input", () => {
     dropped_outlier: "12",
     blocked_reason: "   ",
   });
-  assert.deepEqual(n.counts, { predictions: 0, nulls: 1, dropped_outlier: 0 });
+  assert.deepEqual(n.counts, {
+    predictions: 0,
+    nulls: 1,
+    dropped_outlier: 0,
+    training_clicks: 0,
+  });
   assert.equal(n.blocked_reason, null, "a whitespace-only reason is not a reason");
 });
 
@@ -105,4 +110,52 @@ test("every non-ok status has wording for the dashboard", () => {
   // "ok" and "unknown" fall through to the real fixation count.
   assert.equal(describeGazeStatus(GAZE_OK), null);
   assert.equal(describeGazeStatus(null), null);
+});
+
+// WebGazer's ridge regression:
+//
+//   predict = function (e) { if (!e || 0 === this.eyeFeaturesClicks.length) return null; ... }
+//
+// Both arms of that `||` emit an identical stream of nulls. Telling them apart
+// is the whole point — one means check the webcam, the other means the model
+// was never trained and the webcam is irrelevant.
+test("nulls with no training clicks is uncalibrated, not a camera fault", () => {
+  const status = deriveGazeStatus({
+    ready: true,
+    predictions: 0,
+    nulls: 5191,
+    training_clicks: 0,
+  });
+  assert.equal(status, "uncalibrated");
+  assert.equal(describeGazeStatus(status), "Not calibrated yet");
+});
+
+test("the same nulls with training clicks behind them is a camera fault", () => {
+  const status = deriveGazeStatus({
+    ready: true,
+    predictions: 0,
+    nulls: 5191,
+    training_clicks: 7,
+  });
+  assert.equal(status, "no_face");
+  assert.equal(describeGazeStatus(status), "No face detected");
+});
+
+test("a trained-but-unseen face and an untrained model differ only in that field", () => {
+  const base = { ready: true, predictions: 0, nulls: 5191 };
+  assert.notEqual(
+    deriveGazeStatus({ ...base, training_clicks: 0 }),
+    deriveGazeStatus({ ...base, training_clicks: 1 }),
+    "one click is the entire difference between the two diagnoses"
+  );
+});
+
+test("one real prediction outranks an untrained model", () => {
+  // Ordering guard: predictions > 0 must win before the training_clicks branch
+  // is consulted, or a session carrying loaded calibration would be called
+  // uncalibrated for not having clicked yet this visit.
+  assert.equal(
+    deriveGazeStatus({ ready: true, predictions: 12, nulls: 9000, training_clicks: 0 }),
+    "ok"
+  );
 });

@@ -57,7 +57,7 @@ const sessionSchema = new mongoose.Schema(
     // Null means the tag never reported, which is itself distinct from "ok".
     gaze_status: {
       type: String,
-      enum: ["ok", "no_face", "blocked", "off", null],
+      enum: ["ok", "no_face", "uncalibrated", "blocked", "off", null],
       default: null,
     },
     // The error webgazer.begin() rejected with, when status is "blocked".
@@ -69,6 +69,10 @@ const sessionSchema = new mongoose.Schema(
       predictions: { type: Number, default: 0 },
       nulls: { type: Number, default: 0 },
       dropped_outlier: { type: Number, default: 0 },
+      // Clicks fed to WebGazer's regression. Zero of these with nulls climbing
+      // is "uncalibrated", not "no_face" — the model returns null on every
+      // frame until a click has trained it, however clearly it sees the face.
+      training_clicks: { type: Number, default: 0 },
     },
 
     pages_visited: { type: [pageVisitSchema], default: [] },

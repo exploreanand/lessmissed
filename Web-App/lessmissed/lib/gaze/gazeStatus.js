@@ -16,6 +16,7 @@ export const GAZE_OK = "ok";
 export const GAZE_NO_FACE = "no_face";
 export const GAZE_BLOCKED = "blocked";
 export const GAZE_OFF = "off";
+export const GAZE_UNCALIBRATED = "uncalibrated";
 
 // WebGazer calls its listener on every animation frame, handing over null
 // whenever it has no prediction. A handful of nulls is just the model warming
@@ -32,7 +33,8 @@ export const NO_FACE_NULL_THRESHOLD = 60;
  * @param {string}  [report.blocked_reason]    why begin() rejected, if it did
  * @param {number}  [report.predictions]       non-null predictions received
  * @param {number}  [report.nulls]             null predictions received
- * @returns {"ok"|"no_face"|"blocked"|"off"|null} null when there is nothing to judge yet
+ * @param {number}  [report.training_clicks]   clicks fed to recordScreenPosition
+ * @returns {"ok"|"no_face"|"uncalibrated"|"blocked"|"off"|null} null when there is nothing to judge yet
  */
 export function deriveGazeStatus(report) {
   if (!report || typeof report !== "object") return null;
@@ -53,8 +55,29 @@ export function deriveGazeStatus(report) {
   if (predictions > 0) return GAZE_OK;
 
   // Ready, running, and handing back nothing but nulls for long enough that it
-  // is not just warming up.
-  if (nulls >= NO_FACE_NULL_THRESHOLD) return GAZE_NO_FACE;
+  // is not just warming up. Which of the two reasons it is depends on whether
+  // the regression had anything to predict *from*:
+  //
+  //   predict = function (e) { if (!e || 0 === this.eyeFeaturesClicks.length) return null; ... }
+  //
+  // Both arms of that `||` produce an identical stream of nulls, but they are
+  // opposite problems. With no training clicks the model cannot return a
+  // prediction however clearly it sees the face, so blaming the camera there
+  // sends someone off checking webcams for a calibration problem — which is
+  // precisely the afternoon this module exists to prevent.
+  //
+  // Only a tag that actually reports the counter can be judged on it. Tags
+  // already cached in the wild do not send training_clicks, and a missing field
+  // is not a zero — reading it as one would relabel every genuine no-face
+  // session from an older tag. Unknown stays no_face, which is what those tags
+  // have always meant.
+  if (nulls >= NO_FACE_NULL_THRESHOLD) {
+    const trainedClicksKnown = Number.isFinite(report.training_clicks);
+    if (trainedClicksKnown && toCount(report.training_clicks) === 0) {
+      return GAZE_UNCALIBRATED;
+    }
+    return GAZE_NO_FACE;
+  }
 
   // Still early, or the tag has not reported yet. Deliberately not "ok": a
   // session that ends here genuinely has no evidence either way.
@@ -84,6 +107,7 @@ export function normalizeGazeReport(report) {
       predictions: toCount(report.predictions),
       nulls: toCount(report.nulls),
       dropped_outlier: toCount(report.dropped_outlier),
+      training_clicks: toCount(report.training_clicks),
     },
   };
 }
@@ -95,6 +119,8 @@ export function describeGazeStatus(status) {
       return "Camera unavailable";
     case GAZE_NO_FACE:
       return "No face detected";
+    case GAZE_UNCALIBRATED:
+      return "Not calibrated yet";
     case GAZE_OFF:
       return "Gaze off";
     default:
