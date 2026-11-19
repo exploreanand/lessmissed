@@ -55,7 +55,7 @@ const ALL_INSIGHTS = {
   session: [
     { id: "INS-SL03", name: "Session Replay + Gaze Dot", phase: 1, desc: "rrweb recording with overlaid gaze dot and click indicators. Synchronized playback." },
     { id: "INS-SL04", name: "Engagement Score",           phase: 1, desc: "Per-session quality gate score in replay list. Aggregate score per page." },
-    { id: "INS-SL01", name: "Confusion Score",            phase: 2, desc: "Composite: backtracking (30%) + scroll-backs (25%) + hesitation time (25%) + re-fixation ratio (20%)." },
+    { id: "INS-SL01", name: "Confusion Score",            phase: 1, desc: "Composite: backtracking (30%) + scroll-backs (25%) + hesitation time (25%) + re-fixation ratio (20%)." },
     { id: "INS-SL02", name: "Task Completion Path",       phase: 2, desc: "Ordered page URLs per session. Most common path vs intended. Deviation detection." },
   ],
 };
@@ -2189,6 +2189,148 @@ function ComparisonBehaviorCard({ ins, catId, insights }) {
   );
 }
 
+// Confusion runs the other way to engagement: a high number is bad.
+const CONFUSION_BAND_STYLE = {
+  calm:      { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+  unsettled: { bar: "bg-amber-500",   text: "text-amber-600 dark:text-amber-400"   },
+  confused:  { bar: "bg-red-500",     text: "text-red-600 dark:text-red-400"       },
+};
+
+const CONFUSION_COMPONENTS = [
+  { key: "backtracking", label: "Backtracking", weight: 30 },
+  { key: "scroll_backs", label: "Scroll-backs", weight: 25 },
+  { key: "hesitation", label: "Hesitation", weight: 25 },
+  { key: "refixation", label: "Re-fixation", weight: 20 },
+];
+
+function ConfusionScoreCard({ ins, catId, insights, projectId }) {
+  // INS-SL01: scored per session from four signals on the spec's weights, then
+  // averaged here. Sessions too short to show a reading pattern are left out
+  // rather than scored calm, so the denominator is stated.
+  const cs = insights.confusion;
+
+  if (!cs || cs.sessions_scored === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no session long enough to judge</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          A score needs at least three separate elements looked at. Sessions shorter than that are
+          left unscored rather than counted as calm.
+        </p>
+      </LiveCard>
+    );
+  }
+
+  const band =
+    cs.avg_score >= 67 ? "confused" : cs.avg_score >= 34 ? "unsettled" : "calm";
+  const worst = cs.worst_sessions ?? [];
+  const fmtMs = (ms) => (ms == null ? "—" : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+
+  return (
+    <LiveCard ins={ins} catId={catId} wide>
+      <div className="flex gap-6">
+        <div className="flex items-end gap-2">
+          <p className={`text-4xl font-bold ${CONFUSION_BAND_STYLE[band].text}`}>{cs.avg_score}</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-1">/ 100</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">{cs.median_score}</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">median session</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cs.sessions_scored}/{cs.total_sessions}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">sessions long enough to score</p>
+        </div>
+      </div>
+
+      <div className="flex gap-1.5">
+        {(cs.bands ?? []).map((b) => (
+          <div key={b.band} className="flex-1">
+            <div className="flex justify-between mb-1 gap-1">
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400">{b.label}</span>
+              <span className="text-[10px] font-semibold text-zinc-600 dark:text-zinc-300 tabular-nums">
+                {b.session_count}
+              </span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${CONFUSION_BAND_STYLE[b.band].bar}`}
+                style={{ width: `${b.pct}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+          What drives it
+        </p>
+        {CONFUSION_COMPONENTS.map((comp) => {
+          const value = cs.component_averages?.[comp.key] ?? 0;
+          const seen = cs.component_coverage?.[comp.key] ?? 0;
+          return (
+            <div key={comp.key} className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-500 w-24 flex-shrink-0">
+                {comp.label}
+                <span className="text-zinc-400"> {comp.weight}%</span>
+              </span>
+              <div className="flex-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${S[catId].bar}`}
+                  style={{ width: `${value}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-zinc-400 w-20 text-right flex-shrink-0 tabular-nums">
+                {value}
+                {seen < cs.sessions_scored && ` · ${seen} sess`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {worst.length > 0 && (
+        <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3 space-y-1.5">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Most confused sessions
+          </p>
+          {worst.map((w) => (
+            <Link
+              key={w.session_id}
+              href={`/dashboard/projects/${projectId}/sessions/${w.session_id}`}
+              className="flex items-center justify-between gap-2 text-xs hover:text-violet-600 dark:hover:text-violet-400 transition-colors"
+            >
+              <span className={`font-semibold tabular-nums w-7 ${CONFUSION_BAND_STYLE[w.band].text}`}>
+                {w.score}
+              </span>
+              <span className="text-zinc-400 flex-1 truncate">
+                {w.revisits} return{w.revisits === 1 ? "" : "s"} ·{" "}
+                {w.scroll_backs == null ? "no scrolling" : `${w.scroll_backs} scroll-back${w.scroll_backs === 1 ? "" : "s"}`} ·{" "}
+                {w.hesitation_ms == null ? "no clicks" : `${fmtMs(w.hesitation_ms)} to click`}
+              </span>
+              <span className="font-mono text-[10px] text-zinc-400 flex-shrink-0">
+                {w.session_id.slice(0, 12)}
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Weights are the spec's; the scales that turn counts into them are ours · a signal a session
+        could not produce is dropped and the rest reweighted, never scored zero · bouncing between a
+        block and its own child is not counted as a return
+      </p>
+    </LiveCard>
+  );
+}
+
 /* ─── insight card router ────────────────────────────────────────────────── */
 
 function InsightCard({ ins, catId, insights, elements, projectId }) {
@@ -2217,6 +2359,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-GC04": return <AttentionToActionCard  ins={ins} catId={catId} insights={insights} />;
     case "INS-GC05": return <DistractionMappingCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC06": return <ComparisonBehaviorCard ins={ins} catId={catId} insights={insights} />;
+    case "INS-SL01": return <ConfusionScoreCard     ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;

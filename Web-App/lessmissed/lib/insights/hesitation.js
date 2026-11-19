@@ -102,11 +102,13 @@ function emptyResult(totalSessions = 0, totalClicks = 0) {
 // start_timestamp, element_id/element_key, duration_ms) and `clicks` are click
 // Events (session_id, timestamp, data.*) — the same shapes GC02 loads, so one
 // fixture can drive both.
-export function computeHesitationStats({ fixations = [], clicks = [], totalSessions = 0 } = {}) {
-  const totalClicks = clicks.length;
-  if (fixations.length === 0 || clicks.length === 0) {
-    return emptyResult(totalSessions, totalClicks);
-  }
+// Pure. One pair per (session, element): the first click that followed the
+// first look at it, with the delay between them. Exported because INS-SL01
+// weights hesitation at 25% of its composite and needs these per session —
+// reusing the rule rather than restating it keeps the two cards from drifting
+// apart on what "hesitation" means.
+export function buildHesitationPairs({ fixations = [], clicks = [] } = {}) {
+  if (fixations.length === 0 || clicks.length === 0) return [];
 
   // Per-session earliest qualifying fixation per element key. Taking the
   // minimum rather than trusting arrival order keeps this correct for unsorted
@@ -154,7 +156,16 @@ export function computeHesitationStats({ fixations = [], clicks = [], totalSessi
     pairs.set(id, { session_id: c.session_id, key, hesitation_ms, data });
   }
 
-  const allPairs = [...pairs.values()];
+  return [...pairs.values()];
+}
+
+export function computeHesitationStats({ fixations = [], clicks = [], totalSessions = 0 } = {}) {
+  const totalClicks = clicks.length;
+  if (fixations.length === 0 || clicks.length === 0) {
+    return emptyResult(totalSessions, totalClicks);
+  }
+
+  const allPairs = buildHesitationPairs({ fixations, clicks });
   const measured = allPairs.filter((p) => p.hesitation_ms <= MAX_HESITATION_MS);
   const pairsOverCap = allPairs.length - measured.length;
 

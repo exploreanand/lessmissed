@@ -235,6 +235,9 @@ export async function loadGazeSequences(project, page) {
     sequences: buildSessionVisits({ fixations, regions: page.regions ?? [] }),
     clicksBySession: buildSessionClicks({ clicks }),
     targets: buildClickTargets({ clicks }),
+    // The raw rows too: INS-SL01 needs the fixation/click pairing per session,
+    // and re-querying for it would double the work this already did.
+    fixations,
     clicks,
   };
 }
