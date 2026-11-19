@@ -16,6 +16,7 @@ import { computeDeadClicks } from "@/lib/insights/deadClicks";
 import { computeLastClickBeforeExit } from "@/lib/insights/lastClickBeforeExit";
 import { computeClickedWithoutLooking } from "@/lib/insights/clickedWithoutLooking";
 import { computeHesitationTime } from "@/lib/insights/hesitation";
+import { computeAttentionToAction } from "@/lib/insights/attentionToAction";
 import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import { pageMatchFilter } from "@/lib/pathTemplate";
@@ -59,7 +60,7 @@ export default async function PageDetailPage({ params }) {
       : 0;
 
   // Element-level data from fixations + clicks for this page's exact path
-  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit, clickedWithoutLooking, hesitation] = await Promise.all([
+  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit, clickedWithoutLooking, hesitation, attentionToAction] = await Promise.all([
     // Group by screenshot region, falling back to the raw selector for
     // fixations derived before the page was labelled. Grouping by region is
     // what separates components that share one selector — on a commerce page a
@@ -131,6 +132,8 @@ export default async function PageDetailPage({ params }) {
     computeClickedWithoutLooking(project, page),
     // INS-GC03: how long a session looked at an element before clicking it
     computeHesitationTime(project, page),
+    // INS-GC04: looks per action per element — also the source for GC01's list
+    computeAttentionToAction(project, page),
   ]);
 
   const clickMap = {};
@@ -171,17 +174,6 @@ export default async function PageDetailPage({ params }) {
       };
     });
 
-  const lookedNotClicked = elements
-    .filter((e) => e.sessions_with_fixation > 0 && e.sessions_with_click < e.sessions_with_fixation * 0.5)
-    .map((e) => ({
-      key: e.key,
-      element_id: e.element_id,
-      label: e.label,
-      pct_looked: e.pct,
-      pct_clicked: totalSessions > 0 ? Math.round((e.sessions_with_click / totalSessions) * 100) : 0,
-    }))
-    .slice(0, 5);
-
   const avgDwellMs =
     elements.length > 0
       ? Math.round(elements.reduce((a, e) => a + e.avg_dwell_ms, 0) / elements.length)
@@ -217,7 +209,14 @@ export default async function PageDetailPage({ params }) {
     clicked_without_looking: clickedWithoutLooking,
     // INS-GC03
     hesitation,
-    looked_not_clicked: lookedNotClicked,
+    // INS-GC04
+    attention_to_action: attentionToAction,
+    // INS-GC01 — from the same module as GC04 so the two cannot disagree about
+    // the same element. This used to be derived here by comparing a count of
+    // fixating sessions against a count of clicking sessions, which are not
+    // the same population: an element clicked only by sessions that never
+    // looked at it scored as though it converted.
+    looked_not_clicked: attentionToAction.looked_not_clicked,
     total_unique_elements_seen: fixationAgg.length,
     total_rage_clicks:   sessions.reduce((a, s) => a + (s.summary?.rage_clicks    ?? 0), 0),
     total_dead_clicks:   sessions.reduce((a, s) => a + (s.summary?.dead_clicks    ?? 0), 0),

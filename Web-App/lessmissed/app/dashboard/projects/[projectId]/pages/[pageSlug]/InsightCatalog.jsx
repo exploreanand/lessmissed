@@ -48,7 +48,7 @@ const ALL_INSIGHTS = {
     { id: "INS-GC01", name: "Looked But Didn't Click",   phase: 1, primary: true, desc: "Elements with fixation > 0 but click == 0. Problem is persuasion, not visibility." },
     { id: "INS-GC02", name: "Clicked Without Looking",    phase: 1, desc: "Click without preceding 200ms fixation. Muscle memory click — label copy doesn't matter for this element." },
     { id: "INS-GC03", name: "Hesitation Time",            phase: 1, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
-    { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 2, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
+    { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 1, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
     { id: "INS-GC05", name: "Distraction Mapping",        phase: 2, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
     { id: "INS-GC06", name: "Comparison Behavior",        phase: 2, desc: "Gaze alternating A-B-A-B 2+ times in 10s before clicking one option. Reveals what users compare." },
   ],
@@ -1568,7 +1568,7 @@ function LookedButDidntClickCard({ ins, catId, insights }) {
         <div className="sm:border-l sm:border-zinc-200 sm:dark:border-zinc-700 sm:pl-4 flex-shrink-0">
           <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide mb-1">Friction ratio</p>
           <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">
-            {top.pct_clicked > 0 ? Math.round(top.pct_looked / top.pct_clicked) : "∞"}:1
+            {top.ratio_text ?? "—"}:1
           </p>
           <p className="text-xs text-zinc-500">saw vs clicked</p>
         </div>
@@ -1792,6 +1792,107 @@ function HesitationTimeCard({ ins, catId, insights }) {
   );
 }
 
+// Same semantic ramp as the hesitation bands: converting reads green, friction
+// red. The spec's own cut-offs, so the thresholds are not ours to argue with.
+const A2A_BAND_STYLE = {
+  converting: { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+  watch:      { bar: "bg-amber-500",   text: "text-amber-600 dark:text-amber-400"   },
+  friction:   { bar: "bg-red-500",     text: "text-red-600 dark:text-red-400"       },
+};
+
+function AttentionToActionCard({ ins, catId, insights }) {
+  // INS-GC04: how many sessions had to look at an element before one acted.
+  // The denominator is the sessions that did both, so this is exactly
+  // 1 / (1 - LBNC) and cannot contradict GC01 above it.
+  //
+  // Elements nobody ever clicked are infinite and belong to GC01; they are
+  // counted here and otherwise left out, so the ranking stays about elements
+  // that do convert and convert badly.
+  const a2a = insights.attention_to_action;
+
+  if (!a2a || a2a.elements_ranked === 0) {
+    const never = a2a?.never_clicked_count ?? 0;
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no element both seen and clicked yet</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          {never > 0
+            ? `${never} element${never === 1 ? " was" : "s were"} looked at and never clicked — infinite by definition, so see Looked But Didn't Click.`
+            : "Needs a session that looked at an element and then clicked that same element."}
+        </p>
+      </LiveCard>
+    );
+  }
+
+  const top = a2a.top_elements ?? [];
+  const worst = top[0]?.ratio ?? 1;
+  const medianBand =
+    a2a.median_ratio < 2 ? "converting" : a2a.median_ratio > 10 ? "friction" : "watch";
+
+  return (
+    <LiveCard ins={ins} catId={catId}>
+      <div className="flex gap-6">
+        <div>
+          <p className={`text-2xl font-bold ${A2A_BAND_STYLE[medianBand].text}`}>
+            {a2a.median_ratio_text}:1
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">median looks per action</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {a2a.friction_count}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            over 10:1 of {a2a.elements_ranked}
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+          Most looks per action
+        </p>
+        {top.map((el) => (
+          <div key={el.key ?? el.element_id}>
+            <div className="flex justify-between mb-1 gap-2">
+              <span
+                title={el.element_id}
+                className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]"
+              >
+                {el.label ?? el.element_id}
+              </span>
+              <span
+                className={`text-xs font-semibold ml-2 flex-shrink-0 tabular-nums ${A2A_BAND_STYLE[el.band].text}`}
+              >
+                {el.ratio_text}:1
+                <span className="text-zinc-400 font-normal">
+                  {" "}
+                  · {el.sessions_fixated_and_clicked}/{el.sessions_with_fixation}
+                </span>
+              </span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${A2A_BAND_STYLE[el.band].bar}`}
+                style={{ width: `${Math.round((el.ratio / worst) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Sessions that looked ÷ sessions that looked and clicked · over 10:1 is high friction,
+        under 2:1 converts well
+        {a2a.never_clicked_count > 0 && ` · ${a2a.never_clicked_count} never clicked at all`}
+      </p>
+    </LiveCard>
+  );
+}
+
 /* ─── insight card router ────────────────────────────────────────────────── */
 
 function InsightCard({ ins, catId, insights, elements, projectId }) {
@@ -1817,6 +1918,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-GC01": return <LookedButDidntClickCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC02": return <ClickedWithoutLookingCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC03": return <HesitationTimeCard     ins={ins} catId={catId} insights={insights} />;
+    case "INS-GC04": return <AttentionToActionCard  ins={ins} catId={catId} insights={insights} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;
