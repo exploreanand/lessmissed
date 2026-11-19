@@ -57,7 +57,7 @@ export async function getOrCreateAnonymousConsumer(visitorId) {
         last_login: new Date(),
       },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   ).lean();
 
   return user._id;

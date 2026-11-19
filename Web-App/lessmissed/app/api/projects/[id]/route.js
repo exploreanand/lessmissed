@@ -33,7 +33,9 @@ export async function PUT(request, { params }) {
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await request.json();
-  const project = await Project.findByIdAndUpdate(id, body, { new: true }).lean();
+  const project = await Project.findByIdAndUpdate(id, body, {
+    returnDocument: "after",
+  }).lean();
   return NextResponse.json(project);
 }
 

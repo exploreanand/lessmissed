@@ -47,7 +47,7 @@ export async function leaseJob(workerId = config.workerId) {
     // Highest priority first, then oldest — so a human waiting on a thumbnail
     // overtakes the nightly drift backlog, but nothing inside a priority band
     // can starve.
-    { sort: { priority: -1, run_after: 1 }, new: true }
+    { sort: { priority: -1, run_after: 1 }, returnDocument: "after" }
   ).lean();
 }
 
