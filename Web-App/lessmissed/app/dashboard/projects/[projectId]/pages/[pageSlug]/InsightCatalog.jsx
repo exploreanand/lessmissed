@@ -49,7 +49,7 @@ const ALL_INSIGHTS = {
     { id: "INS-GC02", name: "Clicked Without Looking",    phase: 1, desc: "Click without preceding 200ms fixation. Muscle memory click — label copy doesn't matter for this element." },
     { id: "INS-GC03", name: "Hesitation Time",            phase: 1, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
     { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 1, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
-    { id: "INS-GC05", name: "Distraction Mapping",        phase: 2, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
+    { id: "INS-GC05", name: "Distraction Mapping",        phase: 1, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
     { id: "INS-GC06", name: "Comparison Behavior",        phase: 2, desc: "Gaze alternating A-B-A-B 2+ times in 10s before clicking one option. Reveals what users compare." },
   ],
   session: [
@@ -1794,6 +1794,10 @@ function HesitationTimeCard({ ins, catId, insights }) {
 
 // Same semantic ramp as the hesitation bands: converting reads green, friction
 // red. The spec's own cut-offs, so the thresholds are not ours to argue with.
+// Mirrors MIN_SESSIONS_FOR_TOP in lib/insights/distraction.js — used only in
+// the copy that explains why nothing is listed.
+const MIN_DISTRACTION_SESSIONS = 2;
+
 const A2A_BAND_STYLE = {
   converting: { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
   watch:      { bar: "bg-amber-500",   text: "text-amber-600 dark:text-amber-400"   },
@@ -1893,6 +1897,165 @@ function AttentionToActionCard({ ins, catId, insights }) {
   );
 }
 
+function DistractionMappingCard({ ins, catId, insights }) {
+  // INS-GC05: the element a session drifted to after its last look at a click
+  // target it never clicked. "Target" means an element somebody on this page
+  // actually clicked, so the card does not accuse a paragraph of stealing
+  // attention from another paragraph — and a CTA nobody has ever clicked is
+  // not a target at all, which is why the target count is on show.
+  const dx = insights.distraction;
+
+  if (!dx || dx.targets_considered === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no click target to lose attention from</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          Nothing on this page has been clicked yet, so no element is known to be a target.
+        </p>
+      </LiveCard>
+    );
+  }
+
+  const top = dx.top_distractors ?? [];
+  const targets = dx.top_targets ?? [];
+  const mostSessions = top[0]?.sessions ?? 1;
+
+  // A zero means one of two opposite things, so say which. If no session's gaze
+  // ever landed on or near a control, nobody was measured as distracted — that
+  // is a coverage statement, not a finding about the page.
+  if ((dx.targets_reachable ?? 0) === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no gaze reached a click target</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          Across {dx.targets_considered} click target{dx.targets_considered === 1 ? "" : "s"}, no
+          session looked at or near one. Gaze resolves to the block of the page it lands in, while a
+          click resolves to the control itself, so controls sitting apart from the content people
+          read are never caught looking.
+        </p>
+      </LiveCard>
+    );
+  }
+
+  if (dx.total_defections === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">0</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            sessions drifted off a target for good
+          </p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          Of {dx.targets_reachable} click target{dx.targets_reachable === 1 ? "" : "s"} anyone looked
+          at, every session either clicked through or was still looking when the recording ended
+          {dx.abandoned_at_end > 0 ? ` (${dx.abandoned_at_end} of them)` : ""}.
+        </p>
+      </LiveCard>
+    );
+  }
+
+  return (
+    <LiveCard ins={ins} catId={catId}>
+      <div className="flex gap-6">
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {dx.pct_sessions_with_distraction}%
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            of sessions left a target for good
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {dx.total_defections}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            defection{dx.total_defections === 1 ? "" : "s"} from {dx.targets_reachable} of{" "}
+            {dx.targets_considered} target{dx.targets_considered === 1 ? "" : "s"}
+          </p>
+        </div>
+      </div>
+
+      {top.length > 0 ? (
+        <div className="space-y-2.5">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Takes the attention
+          </p>
+          {top.map((el) => (
+            <div key={el.key ?? el.element_id}>
+              <div className="flex justify-between mb-1 gap-2">
+                <span
+                  title={el.element_id}
+                  className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[150px]"
+                >
+                  {el.label ?? el.element_id}
+                </span>
+                <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 ml-2 flex-shrink-0 tabular-nums">
+                  {el.sessions} sess
+                  {el.targets_affected > 1 && (
+                    <span className="text-zinc-400 font-normal"> · {el.targets_affected} targets</span>
+                  )}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${S[catId].bar}`}
+                  style={{ width: `${Math.round((el.sessions / mostSessions) * 100)}%` }}
+                />
+              </div>
+              {el.top_target && (
+                <p className="text-[10px] text-zinc-400 mt-0.5 truncate">
+                  mostly from {el.top_target.label}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-400">
+          Sessions did drift away, but no single element did it to {MIN_DISTRACTION_SESSIONS}+ sessions
+          — too scattered to name a cause yet.
+        </p>
+      )}
+
+      {targets.length > 0 && (
+        <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3 space-y-1">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Loses the most attention
+          </p>
+          {targets.map((t) => (
+            <div key={t.key ?? t.element_id} className="flex items-center justify-between gap-2 text-xs">
+              <span
+                title={t.element_id}
+                className="truncate text-zinc-600 dark:text-zinc-400 max-w-[170px]"
+              >
+                {t.label ?? t.element_id}
+              </span>
+              <span className="text-zinc-400 flex-shrink-0 tabular-nums">
+                {t.sessions_abandoned} left · {t.pct_sessions}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        A target is an interactive element someone clicked · a look at it counts from up to two
+        levels of its container · counted on the last look before the session moved on for good
+        {dx.abandoned_at_end > 0 &&
+          ` · ${dx.abandoned_at_end} were still looking when the recording ended, so nothing is blamed`}
+      </p>
+    </LiveCard>
+  );
+}
+
 /* ─── insight card router ────────────────────────────────────────────────── */
 
 function InsightCard({ ins, catId, insights, elements, projectId }) {
@@ -1919,6 +2082,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-GC02": return <ClickedWithoutLookingCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC03": return <HesitationTimeCard     ins={ins} catId={catId} insights={insights} />;
     case "INS-GC04": return <AttentionToActionCard  ins={ins} catId={catId} insights={insights} />;
+    case "INS-GC05": return <DistractionMappingCard ins={ins} catId={catId} insights={insights} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;
