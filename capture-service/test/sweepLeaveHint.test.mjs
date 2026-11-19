@@ -47,7 +47,7 @@ const objectId = () => new mongoose.Types.ObjectId();
 const LEAVE_GRACE_MS = 60 * 1000;
 const IDLE_MS = 30 * 60 * 1000;
 
-async function seed({ secondsAgo = 5, leftSecondsAgo = null } = {}) {
+async function seed({ secondsAgo = 5, leftSecondsAgo = null, kind = "closed" } = {}) {
   const project = await Project.create({
     client_id: objectId(), name: "Test", domain: "example.test",
     pages: [{ path: "/p", slug: "p", target: true }],
@@ -62,6 +62,7 @@ async function seed({ secondsAgo = 5, leftSecondsAgo = null } = {}) {
     started_at: activity,
     last_activity_at: activity,
     left_hint_at: leftSecondsAgo == null ? null : new Date(Date.now() - leftSecondsAgo * 1000),
+    left_hint_kind: leftSecondsAgo == null ? null : kind,
     pages_visited: [{ path: "/p", template: "/p", entered_at: activity }],
   });
 
@@ -171,4 +172,93 @@ test("omitting the grace period ignores hints entirely", async (t) => {
   assert.equal(result.finalized, 0, "no leaveGraceMs means the idle rule alone");
   const still = await Session.findOne({ session_id: session.session_id }).lean();
   assert.equal(still.status, "active");
+});
+
+// ─── the two-signal ladder ────────────────────────────────────────────────────
+//
+// pagehide is unreliable: measured in production it delivered about half the
+// time on tab close. visibilitychange-to-hidden is the last moment a browser
+// reliably sends anything, so it is the signal that actually arrives — but it
+// also fires for a plain tab switch, hence a much longer grace.
+
+const HIDDEN_GRACE_MS = 5 * 60 * 1000;
+
+test("a hidden hint waits far longer than a closed one", async (t) => {
+  if (skipUnlessMongo(t)) return;
+  // Two minutes after going hidden: past the closed grace, nowhere near the
+  // hidden one. A backgrounded tab must not be finalized out from under a
+  // visitor who is still there.
+  const { session } = await seed({ leftSecondsAgo: 120, kind: "hidden" });
+
+  const early = await sweepIdleSessions({
+    idleMs: IDLE_MS, leaveGraceMs: LEAVE_GRACE_MS, hiddenGraceMs: HIDDEN_GRACE_MS,
+  });
+  assert.equal(early.finalized, 0, "a tab switch must not finalize the session");
+  assert.equal(
+    (await Session.findOne({ session_id: session.session_id }).lean()).status,
+    "active"
+  );
+});
+
+test("a hidden hint does finalize once its own grace passes", async (t) => {
+  if (skipUnlessMongo(t)) return;
+  // This is the path that catches a tab close whose pagehide beacon was
+  // dropped — without it that session waits out the 30-minute idle rule.
+  const { session } = await seed({ leftSecondsAgo: 400, kind: "hidden" });
+
+  const result = await sweepIdleSessions({
+    idleMs: IDLE_MS, leaveGraceMs: LEAVE_GRACE_MS, hiddenGraceMs: HIDDEN_GRACE_MS,
+  });
+  assert.equal(result.finalized, 1);
+  assert.equal(result.byLeave, 1);
+
+  const done = await Session.findOne({ session_id: session.session_id }).lean();
+  assert.equal(done.status, "completed");
+  assert.ok(done.summary.total_fixations > 0, "fixations must be derived");
+});
+
+test("a hint with no kind is treated as closed", async (t) => {
+  if (skipUnlessMongo(t)) return;
+  // Sessions whose hint was written by a tag that only ever sent pagehide.
+  const { session } = await seed({ leftSecondsAgo: 120, kind: "closed" });
+  await Session.updateOne(
+    { session_id: session.session_id },
+    { $unset: { left_hint_kind: "" } }
+  );
+
+  const result = await sweepIdleSessions({
+    idleMs: IDLE_MS, leaveGraceMs: LEAVE_GRACE_MS, hiddenGraceMs: HIDDEN_GRACE_MS,
+  });
+  assert.equal(result.finalized, 1, "a kindless hint must still use the short grace");
+});
+
+test("hiddenGraceMs defaults to a multiple of the closed grace", async (t) => {
+  if (skipUnlessMongo(t)) return;
+  // Callers that pass only leaveGraceMs must not accidentally get the short
+  // grace applied to hidden hints.
+  const { session } = await seed({ leftSecondsAgo: 120, kind: "hidden" });
+
+  const result = await sweepIdleSessions({ idleMs: IDLE_MS, leaveGraceMs: LEAVE_GRACE_MS });
+  assert.equal(result.finalized, 0, "hidden must not inherit the 60s grace");
+  assert.equal(
+    (await Session.findOne({ session_id: session.session_id }).lean()).status,
+    "active"
+  );
+});
+
+test("both hint kinds are picked up in one sweep", async (t) => {
+  if (skipUnlessMongo(t)) return;
+  const a = await seed({ leftSecondsAgo: 120, kind: "closed" });
+  const b = await seed({ leftSecondsAgo: 400, kind: "hidden" });
+
+  const result = await sweepIdleSessions({
+    idleMs: IDLE_MS, leaveGraceMs: LEAVE_GRACE_MS, hiddenGraceMs: HIDDEN_GRACE_MS, limit: 10,
+  });
+  assert.equal(result.finalized, 2);
+  for (const { session } of [a, b]) {
+    assert.equal(
+      (await Session.findOne({ session_id: session.session_id }).lean()).status,
+      "completed"
+    );
+  }
 });

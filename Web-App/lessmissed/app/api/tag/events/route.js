@@ -6,9 +6,11 @@ import { handleTagPreflight, authenticateTagRequest, jsonWithCors } from "@/lib/
 
 // POST /api/tag/events
 // Body: { session_id, events: [{ timestamp, type, page_url, data }] }
-// Query: ?leaving=1 marks the visitor as having left (the tag's pagehide
-//        beacon). Accepted with an empty events array, since there may be
-//        nothing queued at that moment; see left_hint_at on the Session model.
+// Query: ?leaving=closed|hidden marks the visitor as possibly having left —
+//        "closed" from pagehide, "hidden" from visibilitychange. Accepted with
+//        an empty events array, since there may be nothing queued at that
+//        moment. See left_hint_at / left_hint_kind on the Session model.
+//        ?leaving=1 is the older spelling and means "closed".
 //
 // The key + origin check is enough to
 // authorize the batch — the session's project_id is looked up server-side
@@ -30,7 +32,14 @@ export async function POST(request) {
     return jsonWithCors({ error: "Invalid JSON" }, 400, cors);
   }
 
-  const leaving = new URL(request.url).searchParams.get("leaving") === "1";
+  // "1" is what tags shipped before the two signals were split; it came from
+  // pagehide, so it means "closed".
+  const leavingParam = new URL(request.url).searchParams.get("leaving");
+  const leavingKind =
+    leavingParam === "hidden" ? "hidden"
+    : leavingParam === "closed" || leavingParam === "1" ? "closed"
+    : null;
+  const leaving = leavingKind !== null;
 
   const { session_id, events } = body;
   if (!session_id || !Array.isArray(events)) {
@@ -120,16 +129,32 @@ export async function POST(request) {
   if (Object.keys(inc).length) update.$inc = inc;
 
   if (leaving) {
-    // pagehide that was not a same-site navigation. A hint, not an end: the
-    // sweeper waits out a grace period, and the next page's visit or batch
-    // clears it if the visitor is in fact still here.
+    // A hint, not an end: the sweeper waits out a grace period sized to the
+    // signal, and the next batch or visit clears it if the visitor turns out to
+    // still be here. Never let "hidden" overwrite a "closed" hint already on
+    // the session — pagehide is the stronger claim and carries the short grace,
+    // and the two fire in quick succession on a real tab close.
     update.$set.left_hint_at = new Date();
+    update.$set.left_hint_kind = leavingKind;
   } else {
     // More events means they are still here.
-    update.$unset = { left_hint_at: "" };
+    update.$unset = { left_hint_at: "", left_hint_kind: "" };
   }
 
-  await Session.updateOne({ session_id }, update);
+  const filter = { session_id };
+  if (leavingKind === "hidden") {
+    // Don't downgrade a closed hint to hidden (see above). Absent kind means a
+    // hint from an older tag, which was always pagehide.
+    filter.left_hint_kind = { $ne: "closed" };
+    const applied = await Session.updateOne(filter, update);
+    // Nothing matched because a stronger hint is already there — still refresh
+    // activity so the idle rule stays honest.
+    if (applied.matchedCount === 0) {
+      await Session.updateOne({ session_id }, { $set: { last_activity_at: new Date() } });
+    }
+  } else {
+    await Session.updateOne(filter, update);
+  }
 
   return jsonWithCors({ ok: true, inserted }, 200, cors);
 }

@@ -403,6 +403,34 @@
     }).catch(function () { enqueueOffline(batch); });
   }
 
+  // Tell the server the visitor may have left. `kind` is 'hidden' (the tab was
+  // backgrounded, which is also what a close looks like at the last reliable
+  // moment) or 'closed' (pagehide, a stronger claim with a shorter grace).
+  //
+  // Its own request rather than a field on the batch: flushBatch returns early
+  // when the queue is empty, which is exactly when this signal matters most.
+  // text/plain and no custom headers keep it a simple CORS request, so there is
+  // no preflight to lose while the page is being torn down.
+  function sendLeaveHint(kind) {
+    if (!session) return;
+    try {
+      var url = API_BASE + '/api/tag/events?leaving=' + kind +
+        '&key=' + encodeURIComponent(API_KEY);
+      var body = JSON.stringify({ session_id: session.session_id, events: [] });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: 'text/plain' }));
+      } else {
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: body,
+          keepalive: true,
+          credentials: 'omit',
+        }).catch(function () {});
+      }
+    } catch (_) { /* best-effort; the idle timeout still covers it */ }
+  }
+
   function enqueueOffline(batch) {
     try {
       var raw = localStorage.getItem(OFFLINE_KEY);
@@ -509,7 +537,25 @@
     if (!session) return;
     var hidden = document.hidden;
     queueEvent({ type: 'visibility', data: { visible: !hidden } });
-    if (hidden) flushBatch();
+    if (!hidden) return;
+
+    // Hidden is the last point a browser reliably delivers anything — pagehide
+    // is best-effort and, measured in production, landed about half the time on
+    // tab close. So beacon here rather than plain-fetch.
+    //
+    // This flush used to be a bare flushBatch(). On a tab close that fetch was
+    // abandoned mid-flight, the batch fell through to the localStorage offline
+    // queue, and pagehide's flushBatch(true) then found an empty queue and sent
+    // nothing — so every session silently lost its last batch, and in a private
+    // window that storage dies with it. Hence: beacon.
+    flushBatch(true);
+
+    // Tell the server the visitor may have gone. "hidden" because this also
+    // fires for a plain tab switch, so it carries a long grace server-side;
+    // coming back clears it on the next batch, which is immediate once gaze
+    // resumes. A real close follows with pagehide and upgrades this to
+    // "closed", which is the short grace.
+    sendLeaveHint('hidden');
   });
 
   // pagehide is the last message point before a hard navigation or tab
@@ -533,22 +579,7 @@
     // of waiting out the 30-minute idle timeout. Separate from flushBatch
     // because that returns early when the queue is empty, which is exactly
     // when this signal matters most.
-    try {
-      var leaveUrl = API_BASE + '/api/tag/events?leaving=1&key=' + encodeURIComponent(API_KEY);
-      var leaveBody = JSON.stringify({ session_id: session.session_id, events: [] });
-      // text/plain keeps this a simple CORS request — see flushBatch above.
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(leaveUrl, new Blob([leaveBody], { type: 'text/plain' }));
-      } else {
-        fetch(leaveUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: leaveBody,
-          keepalive: true,
-          credentials: 'omit',
-        }).catch(function () {});
-      }
-    } catch (_) { /* leaving is best-effort; the idle timeout still covers it */ }
+    sendLeaveHint('closed');
 
     // Another tab may share this session and still be live.
     if (channel) try { channel.postMessage({ type: 'tab_closing' }); } catch (_) {}

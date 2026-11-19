@@ -48,6 +48,10 @@ export const config = {
   // Set CAPTURE_SESSION_SWEEP_INTERVAL_MS=0 to disable the sweep entirely.
   sessionIdleMs: num("SESSION_IDLE_MS", 30 * 60 * 1000),
   sessionLeaveGraceMs: num("SESSION_LEAVE_GRACE_MS", 60 * 1000),
+  // visibilitychange-to-hidden also fires for a plain tab switch, so it waits
+  // far longer than pagehide. It is what catches a tab close whose pagehide
+  // beacon was dropped, instead of letting it fall to the idle rule.
+  sessionHiddenGraceMs: num("SESSION_HIDDEN_GRACE_MS", 5 * 60 * 1000),
   sessionSweepIntervalMs: num("CAPTURE_SESSION_SWEEP_INTERVAL_MS", 30 * 1000),
 
   // Per-phase render budgets. Navigation is the one that actually trips on slow

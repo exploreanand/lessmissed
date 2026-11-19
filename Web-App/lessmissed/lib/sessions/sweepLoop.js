@@ -38,6 +38,11 @@ export function sweepLoopConfig() {
     // Likewise longer than the worker's 60s. SESSION_LEAVE_GRACE_MS is honoured
     // as a fallback so a single env var shortens both in development.
     leaveGraceMs: num("WEB_SWEEP_LEAVE_GRACE_MS", num("SESSION_LEAVE_GRACE_MS", 90_000)),
+    // A "hidden" hint also fires on a plain tab switch, so it waits much
+    // longer than a pagehide. It is the signal that still arrives when a
+    // tab-close beacon is dropped, which is what keeps that case off the
+    // 30-minute idle rule.
+    hiddenGraceMs: num("WEB_SWEEP_HIDDEN_GRACE_MS", num("SESSION_HIDDEN_GRACE_MS", 6 * 60_000)),
     // Small: one finalize reads a whole session's gaze stream, and this process
     // is answering tag requests at the same time.
     limit: num("WEB_SWEEP_LIMIT", 3),
@@ -52,10 +57,11 @@ export function startSessionSweepLoop(config = sweepLoopConfig()) {
   if (started) return null;
   started = true;
 
-  const { intervalMs, idleMs, leaveGraceMs, limit } = config;
+  const { intervalMs, idleMs, leaveGraceMs, hiddenGraceMs, limit } = config;
   console.log(
     `[sweep] session sweep every ${Math.round(intervalMs / 1000)}s ` +
-      `(leave grace ${Math.round(leaveGraceMs / 1000)}s, idle ${Math.round(idleMs / 60000)}m, limit ${limit})`
+      `(closed grace ${Math.round(leaveGraceMs / 1000)}s, hidden grace ${Math.round(hiddenGraceMs / 1000)}s, ` +
+      `idle ${Math.round(idleMs / 60000)}m, limit ${limit})`
   );
 
   const tick = async () => {
@@ -72,6 +78,7 @@ export function startSessionSweepLoop(config = sweepLoopConfig()) {
       const { finalized, byLeave, byIdle } = await sweepIdleSessions({
         idleMs,
         leaveGraceMs,
+        hiddenGraceMs,
         limit,
       });
       if (finalized) {

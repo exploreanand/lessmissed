@@ -71,12 +71,25 @@ const sessionSchema = new mongoose.Schema(
     // visitor has left (the tag never reliably finalizes on its own). Defaults
     // to session-start so a session with no later events is still sweepable.
     last_activity_at: { type: Date, default: Date.now },
-    // Set when the tag beacons a pagehide that is not a same-site navigation.
-    // A *hint*, not an end time: pagehide also fires for a full-page navigation
-    // within the site, so any later event batch or visit clears it. It lets the
-    // sweeper finalize about a minute after someone leaves instead of waiting
-    // out the 30-minute idle timeout.
+    // Set when the tag reports that the visitor may have gone. A *hint*, not an
+    // end time: both signals behind it also fire when the visitor is staying,
+    // so any later event batch or visit clears it. It lets the sweeper finalize
+    // about a minute after someone leaves instead of waiting out the 30-minute
+    // idle timeout.
     left_hint_at: { type: Date, default: null },
+    // Which signal set the hint, because they deserve very different patience:
+    //
+    //   "closed"  pagehide, excluding back/forward-cache entry. The visitor is
+    //             almost certainly gone; only a same-site navigation needs to
+    //             be waited out, so a short grace.
+    //   "hidden"  visibilitychange to hidden. The last moment a browser
+    //             reliably lets us send anything — but it also fires for a
+    //             mere tab switch, so this needs a long grace. Coming back
+    //             clears the hint on the next batch, which is within a second
+    //             because gaze resumes.
+    //
+    // Null on sessions whose hint predates this field; treated as "closed".
+    left_hint_kind: { type: String, enum: ["closed", "hidden", null], default: null },
     // Finalize lease. Held while a sweeper or the tag's own stop is doing the
     // work; status stays "active" until that work has actually finished, so an
     // interrupted finalize is retried rather than lost. Previously the sweeper

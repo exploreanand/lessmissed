@@ -32,6 +32,7 @@ async function maybeSweepSessions() {
     const { finalized, byLeave, byIdle } = await sweepIdleSessions({
       idleMs: config.sessionIdleMs,
       leaveGraceMs: config.sessionLeaveGraceMs,
+      hiddenGraceMs: config.sessionHiddenGraceMs,
     });
     if (finalized) {
       console.log(

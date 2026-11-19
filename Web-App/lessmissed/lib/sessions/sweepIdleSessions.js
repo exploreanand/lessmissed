@@ -9,14 +9,19 @@
 //
 // Two ways a session gets picked up here:
 //
-//   left_hint_at   the tag beaconed a pagehide that was not a same-site
-//                  navigation. Finalized after a short grace, because any
-//                  event batch or visit from the next page clears the hint.
-//                  This is what turns "30 minutes, or never" into "about a
-//                  minute".
+//   "closed" hint  the tag beaconed a pagehide that was not a back/forward
+//                  cache entry. Short grace: only a same-site navigation has
+//                  to be waited out, and that clears the hint within a second.
+//   "hidden" hint  visibilitychange to hidden — the last moment a browser
+//                  reliably delivers anything, so this is the signal that
+//                  actually arrives when a pagehide beacon gets dropped on tab
+//                  close. But it also fires for a plain tab switch, so it gets
+//                  a much longer grace; a visitor who comes back clears it on
+//                  their next batch, which is within a second since gaze
+//                  resumes.
 //   last_activity  nothing at all for idleMs. The long backstop, for sessions
-//                  whose leave hint never arrived — a crashed tab, a killed
-//                  browser, a beacon dropped on the way out.
+//                  where neither hint arrived — a crashed tab, a killed
+//                  browser, a device that lost power.
 //
 // Both run the same finalize path the PATCH route uses, so the numbers can't
 // drift between "stopped explicitly" and "timed out".
@@ -32,31 +37,53 @@ import { claimForFinalize, releaseFinalizeClaim, isPoisoned } from "./claimSessi
  * Finalize sessions whose visitors have gone.
  *
  * @param {object}  opts
- * @param {number}  opts.idleMs        finalize after this much silence
- * @param {number} [opts.leaveGraceMs] finalize this long after a leave hint; omit to ignore hints
- * @param {number} [opts.limit]        most sessions to finalize per call
+ * @param {number}  opts.idleMs         finalize after this much silence
+ * @param {number} [opts.leaveGraceMs]  grace for a "closed" hint; omit to ignore hints
+ * @param {number} [opts.hiddenGraceMs] grace for a "hidden" hint; defaults to 5x leaveGraceMs
+ * @param {number} [opts.limit]         most sessions to finalize per call
  * @returns {Promise<{finalized: number, byLeave: number, byIdle: number}>}
  */
-export async function sweepIdleSessions({ idleMs, leaveGraceMs, limit = 100 } = {}) {
+export async function sweepIdleSessions({
+  idleMs,
+  leaveGraceMs,
+  hiddenGraceMs,
+  limit = 100,
+} = {}) {
   const now = Date.now();
   const candidates = [];
   const seen = new Set();
 
-  // Two queries rather than a third arm on the $or: each one then matches an
-  // index outright ({status, left_hint_at} and {status, last_activity_at})
-  // instead of leaving the planner to union them.
+  // Separate queries rather than more arms on one $or: each matches an index
+  // outright ({status, left_hint_at} and {status, last_activity_at}) instead of
+  // leaving the planner to union them.
   if (leaveGraceMs > 0) {
-    const leaving = await Session.find({
-      status: "active",
-      left_hint_at: { $ne: null, $lt: new Date(now - leaveGraceMs) },
-    })
-      .sort({ left_hint_at: 1 })
-      .limit(limit)
-      .select("_id session_id")
-      .lean();
-    for (const s of leaving) {
-      seen.add(String(s._id));
-      candidates.push({ id: s._id, reason: "leave" });
+    const hiddenGrace = hiddenGraceMs ?? leaveGraceMs * 5;
+    const hintQueries = [
+      // A hint with no kind came from a tag that only ever sent pagehide.
+      {
+        status: "active",
+        left_hint_at: { $ne: null, $lt: new Date(now - leaveGraceMs) },
+        left_hint_kind: { $in: ["closed", null] },
+      },
+      {
+        status: "active",
+        left_hint_at: { $ne: null, $lt: new Date(now - hiddenGrace) },
+        left_hint_kind: "hidden",
+      },
+    ];
+
+    for (const query of hintQueries) {
+      if (candidates.length >= limit) break;
+      const leaving = await Session.find(query)
+        .sort({ left_hint_at: 1 })
+        .limit(limit - candidates.length)
+        .select("_id session_id")
+        .lean();
+      for (const s of leaving) {
+        if (seen.has(String(s._id))) continue;
+        seen.add(String(s._id));
+        candidates.push({ id: s._id, reason: "leave" });
+      }
     }
   }
 
