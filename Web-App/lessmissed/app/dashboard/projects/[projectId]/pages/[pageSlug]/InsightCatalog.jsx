@@ -50,7 +50,7 @@ const ALL_INSIGHTS = {
     { id: "INS-GC03", name: "Hesitation Time",            phase: 1, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
     { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 1, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
     { id: "INS-GC05", name: "Distraction Mapping",        phase: 1, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
-    { id: "INS-GC06", name: "Comparison Behavior",        phase: 2, desc: "Gaze alternating A-B-A-B 2+ times in 10s before clicking one option. Reveals what users compare." },
+    { id: "INS-GC06", name: "Comparison Behavior",        phase: 1, desc: "Gaze alternating A-B-A-B 2+ times in 10s before clicking one option. Reveals what users compare." },
   ],
   session: [
     { id: "INS-SL03", name: "Session Replay + Gaze Dot", phase: 1, desc: "rrweb recording with overlaid gaze dot and click indicators. Synchronized playback." },
@@ -1794,9 +1794,9 @@ function HesitationTimeCard({ ins, catId, insights }) {
 
 // Same semantic ramp as the hesitation bands: converting reads green, friction
 // red. The spec's own cut-offs, so the thresholds are not ours to argue with.
-// Mirrors MIN_SESSIONS_FOR_TOP in lib/insights/distraction.js — used only in
-// the copy that explains why nothing is listed.
-const MIN_DISTRACTION_SESSIONS = 2;
+// Mirrors MIN_SESSIONS_FOR_TOP, which distraction.js and comparison.js both
+// set to 2. Used only in the copy that explains why nothing is listed.
+const MIN_RANKING_SESSIONS = 2;
 
 const A2A_BAND_STYLE = {
   converting: { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
@@ -2020,7 +2020,7 @@ function DistractionMappingCard({ ins, catId, insights }) {
         </div>
       ) : (
         <p className="text-xs text-zinc-400">
-          Sessions did drift away, but no single element did it to {MIN_DISTRACTION_SESSIONS}+ sessions
+          Sessions did drift away, but no single element did it to {MIN_RANKING_SESSIONS}+ sessions
           — too scattered to name a cause yet.
         </p>
       )}
@@ -2056,6 +2056,139 @@ function DistractionMappingCard({ ins, catId, insights }) {
   );
 }
 
+function ComparisonBehaviorCard({ ins, catId, insights }) {
+  // INS-GC06: both sides looked at twice or more inside the same 10s, which is
+  // the spec's A-B-A-B. Pairs where one element contains the other are thrown
+  // out upstream — gaze flickers between a block and its own child, and that
+  // is not a comparison.
+  //
+  // `both_choosable` marks the pairs where each side actually holds something
+  // clickable. Where none do, the card says so rather than presenting two
+  // blocks of copy as competing options.
+  const cp = insights.comparison;
+
+  if (!cp || cp.total_comparisons === 0) {
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no back-and-forth found</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          Needs a session that looked at two different elements twice each within ten seconds.
+        </p>
+      </LiveCard>
+    );
+  }
+
+  const top = cp.top_pairs ?? [];
+
+  return (
+    <LiveCard ins={ins} catId={catId} wide>
+      <div className="flex gap-6">
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cp.pct_sessions_comparing}%
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            of sessions weighed two things up
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cp.avg_alternations}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            looks back and forth, on average
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {cp.comparisons_with_choice}/{cp.total_comparisons}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">ended in a click on one</p>
+        </div>
+      </div>
+
+      {cp.choosable_pairs === 0 && (
+        <p className="text-xs text-amber-600 dark:text-amber-500 leading-relaxed">
+          None of these pairs has something clickable on both sides, so they are comparisons of
+          content rather than of options — people re-reading two blocks, not choosing between two
+          products.
+        </p>
+      )}
+
+      {top.length > 0 ? (
+        <div className="space-y-3">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Looked at together most often
+          </p>
+          {top.map((p) => (
+            <div
+              key={`${p.a.key}|${p.b.key}`}
+              className="rounded-xl border border-zinc-100 dark:border-zinc-800 p-2.5 space-y-1"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  title={p.a.element_id}
+                  className={`text-xs truncate ${
+                    p.winner === "a"
+                      ? "font-semibold text-zinc-900 dark:text-zinc-50"
+                      : "text-zinc-600 dark:text-zinc-400"
+                  }`}
+                >
+                  {p.a.label}
+                </span>
+                <span className="text-[10px] text-zinc-400 flex-shrink-0 tabular-nums">
+                  {p.clicked_a} chose
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] uppercase tracking-wider text-zinc-300 dark:text-zinc-600">
+                  versus
+                </span>
+                <div className="h-px flex-1 bg-zinc-100 dark:bg-zinc-800" />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  title={p.b.element_id}
+                  className={`text-xs truncate ${
+                    p.winner === "b"
+                      ? "font-semibold text-zinc-900 dark:text-zinc-50"
+                      : "text-zinc-600 dark:text-zinc-400"
+                  }`}
+                >
+                  {p.b.label}
+                </span>
+                <span className="text-[10px] text-zinc-400 flex-shrink-0 tabular-nums">
+                  {p.clicked_b} chose
+                </span>
+              </div>
+              <p className="text-[10px] text-zinc-400 pt-0.5">
+                {p.sessions} session{p.sessions === 1 ? "" : "s"} · {p.avg_alternations} looks back
+                and forth
+                {p.both_choosable && " · two clickable options"}
+                {p.clicked_neither > 0 &&
+                  ` · ${p.clicked_neither} chose neither`}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-400">
+          {cp.pairs_found} pair{cp.pairs_found === 1 ? "" : "s"} were compared, but none by
+          {" "}{MIN_RANKING_SESSIONS}+ sessions — too scattered to name yet.
+        </p>
+      )}
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Both sides looked at twice or more within ten seconds · an element and its own child are
+        excluded, since gaze flickers between them
+      </p>
+    </LiveCard>
+  );
+}
+
 /* ─── insight card router ────────────────────────────────────────────────── */
 
 function InsightCard({ ins, catId, insights, elements, projectId }) {
@@ -2083,6 +2216,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-GC03": return <HesitationTimeCard     ins={ins} catId={catId} insights={insights} />;
     case "INS-GC04": return <AttentionToActionCard  ins={ins} catId={catId} insights={insights} />;
     case "INS-GC05": return <DistractionMappingCard ins={ins} catId={catId} insights={insights} />;
+    case "INS-GC06": return <ComparisonBehaviorCard ins={ins} catId={catId} insights={insights} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;

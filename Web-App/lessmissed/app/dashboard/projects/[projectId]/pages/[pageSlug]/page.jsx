@@ -18,6 +18,7 @@ import { computeClickedWithoutLooking } from "@/lib/insights/clickedWithoutLooki
 import { computeHesitationTime } from "@/lib/insights/hesitation";
 import { computeAttentionToAction } from "@/lib/insights/attentionToAction";
 import { computeDistraction } from "@/lib/insights/distraction";
+import { computeComparison } from "@/lib/insights/comparison";
 import { describeElement, isInstrumentElement } from "@/lib/insights/describeElement";
 import { getOwnedProject } from "@/lib/auth/ownership";
 import { pageMatchFilter } from "@/lib/pathTemplate";
@@ -61,7 +62,7 @@ export default async function PageDetailPage({ params }) {
       : 0;
 
   // Element-level data from fixations + clicks for this page's exact path
-  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit, clickedWithoutLooking, hesitation, attentionToAction, distraction] = await Promise.all([
+  const [fixationAgg, clickAgg, firstFixation, scanPath, attentionDropOff, backtracking, scrollDepth, scrollVelocity, scrollBack, foldAwareness, rageClicks, deadClicks, lastClickBeforeExit, clickedWithoutLooking, hesitation, attentionToAction, distraction, comparison] = await Promise.all([
     // Group by screenshot region, falling back to the raw selector for
     // fixations derived before the page was labelled. Grouping by region is
     // what separates components that share one selector — on a commerce page a
@@ -137,6 +138,8 @@ export default async function PageDetailPage({ params }) {
     computeAttentionToAction(project, page),
     // INS-GC05: which element took the attention a click target lost
     computeDistraction(project, page),
+    // INS-GC06: pairs a session looked back and forth between before choosing
+    computeComparison(project, page),
   ]);
 
   const clickMap = {};
@@ -216,6 +219,8 @@ export default async function PageDetailPage({ params }) {
     attention_to_action: attentionToAction,
     // INS-GC05
     distraction,
+    // INS-GC06
+    comparison,
     // INS-GC01 — from the same module as GC04 so the two cannot disagree about
     // the same element. This used to be derived here by comparing a count of
     // fixating sessions against a count of clicking sessions, which are not
