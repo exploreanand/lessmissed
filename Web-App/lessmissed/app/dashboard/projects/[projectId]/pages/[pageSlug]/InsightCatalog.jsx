@@ -47,7 +47,7 @@ const ALL_INSIGHTS = {
   gaze_click: [
     { id: "INS-GC01", name: "Looked But Didn't Click",   phase: 1, primary: true, desc: "Elements with fixation > 0 but click == 0. Problem is persuasion, not visibility." },
     { id: "INS-GC02", name: "Clicked Without Looking",    phase: 1, desc: "Click without preceding 200ms fixation. Muscle memory click — label copy doesn't matter for this element." },
-    { id: "INS-GC03", name: "Hesitation Time",            phase: 2, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
+    { id: "INS-GC03", name: "Hesitation Time",            phase: 1, desc: "Time between first fixation and click on same element. Short = confident. Long = friction." },
     { id: "INS-GC04", name: "Attention-to-Action Ratio",  phase: 2, desc: "(sessions with fixation) / (sessions with click) per element. > 10:1 = high friction. < 2:1 = converting well." },
     { id: "INS-GC05", name: "Distraction Mapping",        phase: 2, desc: "Gaze pulled from target to different element, never returns to click target. Attention cannibalization." },
     { id: "INS-GC06", name: "Comparison Behavior",        phase: 2, desc: "Gaze alternating A-B-A-B 2+ times in 10s before clicking one option. Reveals what users compare." },
@@ -1652,6 +1652,146 @@ function EngagementScoreCard({ ins, catId, insights }) {
   );
 }
 
+// Confident / considered / friction read as green / amber / red, the same
+// semantic ramp EngagementScoreCard uses for its score. The per-element bars
+// below stay on the category colour, like every other ranked list here.
+const HESITATION_BAND_STYLE = {
+  confident:  { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+  considered: { bar: "bg-amber-500",   text: "text-amber-600 dark:text-amber-400"   },
+  friction:   { bar: "bg-red-500",     text: "text-red-600 dark:text-red-400"       },
+};
+
+function HesitationTimeCard({ ins, catId, insights }) {
+  // INS-GC03: the delay between the first look at an element and the click on
+  // it. Ranked slowest-first, because the friction end is the actionable one.
+  // Pairs more than 30s apart are excluded from the median and reported on
+  // their own line — someone who looked, read the page and came back later did
+  // not hesitate, and letting that gap into the average would say they did.
+  const hz = insights.hesitation;
+
+  const fmt = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+
+  if (!hz || hz.pairs_measured === 0) {
+    const capped = hz?.pairs_over_cap ?? 0;
+    return (
+      <LiveCard ins={ins} catId={catId}>
+        <div>
+          <p className="text-2xl font-bold text-zinc-400">—</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">no look-then-click pairs yet</p>
+        </div>
+        <p className="text-xs text-zinc-400">
+          {capped > 0
+            ? `${capped} click${capped === 1 ? "" : "s"} followed a look more than 30s earlier — too far apart to read as hesitation.`
+            : "Needs a session that looked at an element and then clicked it."}
+        </p>
+      </LiveCard>
+    );
+  }
+
+  // Classify the headline against the server's own band edges rather than
+  // repeating the thresholds here, so the two cannot drift.
+  const bandOf = (ms) =>
+    hz.bands.find((b) => ms >= b.min_ms && (b.max_ms == null || ms < b.max_ms))?.band ?? "considered";
+
+  const rangeLabel = (b) =>
+    b.max_ms == null
+      ? `${b.min_ms / 1000}s+`
+      : b.min_ms === 0
+      ? `<${b.max_ms / 1000}s`
+      : `${b.min_ms / 1000}–${b.max_ms / 1000}s`;
+
+  const top = hz.top_elements ?? [];
+  const slowest = top[0]?.median_hesitation_ms ?? 1;
+
+  return (
+    <LiveCard ins={ins} catId={catId}>
+      <div className="flex gap-6">
+        <div>
+          <p className={`text-2xl font-bold ${HESITATION_BAND_STYLE[bandOf(hz.median_hesitation_ms)].text}`}>
+            {fmt(hz.median_hesitation_ms)}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">median look → click</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+            {fmt(hz.p90_hesitation_ms)}
+          </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">slowest 10%</p>
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+          {hz.pairs_measured} decision{hz.pairs_measured === 1 ? "" : "s"} across {hz.sessions_measured} session
+          {hz.sessions_measured === 1 ? "" : "s"}
+        </p>
+        {hz.bands.map((b) => (
+          <div key={b.band}>
+            <div className="flex justify-between mb-1 gap-2">
+              <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                {b.label}
+                <span className="text-zinc-400"> · {rangeLabel(b)}</span>
+              </span>
+              <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 ml-2 flex-shrink-0 tabular-nums">
+                {b.pct}%
+              </span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${HESITATION_BAND_STYLE[b.band].bar}`}
+                style={{ width: `${b.pct}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {top.length > 0 ? (
+        <div className="space-y-2.5">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wide">
+            Longest pause before clicking
+          </p>
+          {top.map((el) => (
+            <div key={el.key ?? el.element_id}>
+              <div className="flex justify-between mb-1 gap-2">
+                <span
+                  title={el.element_id}
+                  className="text-xs text-zinc-600 dark:text-zinc-400 truncate max-w-[160px]"
+                >
+                  {el.label ?? el.element_id}
+                </span>
+                <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 ml-2 flex-shrink-0 tabular-nums">
+                  {fmt(el.median_hesitation_ms)}
+                  <span className="text-zinc-400 font-normal">
+                    {" "}
+                    · {el.sessions_measured} sess
+                  </span>
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${S[catId].bar}`}
+                  style={{ width: `${Math.round((el.median_hesitation_ms / slowest) * 100)}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-400">
+          Pairs recorded, but no element hit the ≥2-session ranking threshold.
+        </p>
+      )}
+
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        First 200ms+ fixation → click on the same element
+        {hz.pairs_over_cap > 0 &&
+          ` · ${hz.pairs_over_cap} pair${hz.pairs_over_cap === 1 ? "" : "s"} over 30s excluded`}
+      </p>
+    </LiveCard>
+  );
+}
+
 /* ─── insight card router ────────────────────────────────────────────────── */
 
 function InsightCard({ ins, catId, insights, elements, projectId }) {
@@ -1676,6 +1816,7 @@ function InsightCard({ ins, catId, insights, elements, projectId }) {
     case "INS-C04":  return <LastClickBeforeExitCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC01": return <LookedButDidntClickCard ins={ins} catId={catId} insights={insights} />;
     case "INS-GC02": return <ClickedWithoutLookingCard ins={ins} catId={catId} insights={insights} />;
+    case "INS-GC03": return <HesitationTimeCard     ins={ins} catId={catId} insights={insights} />;
     case "INS-SL03": return <SessionReplayCard      ins={ins} catId={catId} insights={insights} projectId={projectId} />;
     case "INS-SL04": return <EngagementScoreCard    ins={ins} catId={catId} insights={insights} />;
     default:         return <LockedCard ins={ins} catId={catId} />;
